@@ -1,11 +1,11 @@
 """
-trace_alpha_wred.py — alpha는 어떻게 결정되고, 차원 축소는 왜 아무 행렬이나 안 되는가?
+trace_alpha_wred.py — How is alpha determined, and why can't any arbitrary matrix be used for dimensionality reduction?
 =================================================================================
 
-질문 1: alpha는 누가, 언제, 어떻게 결정하나?
-질문 2: W_red는 그냥 차원만 줄이면 되는 게 아닌 것 같은데?
+Question 1: Who determines alpha, when, and how?
+Question 2: It seems like W_red can't just reduce dimensions with any matrix?
 
-실행: python3 trace_alpha_wred.py
+Run: python3 trace_alpha_wred.py
 =================================================================================
 """
 
@@ -13,7 +13,7 @@ import math
 import random
 random.seed(42)
 
-def 구분선(title):
+def section_header(title):
     print(f"\n{'='*68}")
     print(f"  {title}")
     print(f"{'='*68}\n")
@@ -29,36 +29,36 @@ def sigmoid(x):
 
 
 # ================================================================
-구분선("PART 1: alpha는 어떻게 결정되는가?")
+section_header("PART 1: How is alpha determined?")
 # ================================================================
 
 print("""
-  먼저 결론부터:
-    alpha는 "학습되는 파라미터"가 아니라 "계산되는 값"입니다.
+  First, the conclusion:
+    alpha is NOT a "learned parameter" but a "computed value."
 
     alpha = sigmoid(W_gate_h @ x  +  W_gate_g @ g)
-            ───────  ──────────     ──────────
-            0~1로    "x를 보고       "g를 보고
-            압축     판단한 점수"     판단한 점수"
+            -------  ----------     ----------
+            squeeze  "score from     "score from
+            to 0~1   examining x"    examining g"
 
-    학습되는 건 W_gate_h와 W_gate_g (행렬 2개)
-    alpha 자체는 매 토큰마다, 매 차원마다 새로 계산됩니다.
+    What IS learned are W_gate_h and W_gate_g (two matrices).
+    alpha itself is freshly computed for every token, every dimension.
 """)
 
 
 # ================================================================
-구분선("1-1. alpha 계산을 숫자로 따라가기")
+section_header("1-1. Following the alpha computation with numbers")
 # ================================================================
 
-d = 4  # 이해를 위해 4차원
+d = 4  # 4 dimensions for understanding
 
-x = [0.5, -0.3, 0.8, 0.2]   # 현재 토큰의 벡터 (원본)
-g = [-0.1, 0.6, 0.1, -0.4]  # 기하학 벡터 (이전 토큰들과의 관계)
+x = [0.5, -0.3, 0.8, 0.2]   # Current token's vector (original)
+g = [-0.1, 0.6, 0.1, -0.4]  # Geometry vector (relationships with previous tokens)
 
-print(f"  x (원본 벡터):   {fmt(x)}")
-print(f"  g (기하학 벡터): {fmt(g)}")
+print(f"  x (original vector):  {fmt(x)}")
+print(f"  g (geometry vector):  {fmt(g)}")
 
-# 게이트 행렬 (학습으로 결정되는 것들)
+# Gate matrices (determined by training)
 W_gate_h = [
     [ 0.3, -0.5,  0.2,  0.1],
     [ 0.1,  0.4, -0.3,  0.6],
@@ -74,222 +74,225 @@ W_gate_g = [
 ]
 
 print(f"""
-  W_gate_h (4x4 행렬) — x를 보는 "눈"
-  W_gate_g (4x4 행렬) — g를 보는 "눈"
+  W_gate_h (4x4 matrix) -- the "eye" that examines x
+  W_gate_g (4x4 matrix) -- the "eye" that examines g
 
-  이 두 행렬이 학습 가능한 파라미터입니다.
-  (처음에는 랜덤, 학습하면서 점점 좋아짐)
+  These two matrices are the trainable parameters.
+  (Random at first, gradually improve through training)
 """)
 
-# 실제 계산
+# Actual computation
 score_h = mat_vec(W_gate_h, x)   # W_gate_h @ x
 score_g = mat_vec(W_gate_g, g)   # W_gate_g @ g
 
 print(f"  STEP 1: W_gate_h @ x = {fmt(score_h, 4)}")
-print(f"          '각 차원에서 x가 얼마나 쓸모있는지 평가'\n")
+print(f"          'Evaluate how useful x is for each dimension'\n")
 
 print(f"  STEP 2: W_gate_g @ g = {fmt(score_g, 4)}")
-print(f"          '각 차원에서 g가 얼마나 쓸모있는지 평가'\n")
+print(f"          'Evaluate how useful g is for each dimension'\n")
 
 combined = [h + g_val for h, g_val in zip(score_h, score_g)]
-print(f"  STEP 3: 두 점수를 더함  = {fmt(combined, 4)}")
-print(f"          '종합 판단: x와 g 둘 다 고려한 점수'\n")
+print(f"  STEP 3: Sum both scores = {fmt(combined, 4)}")
+print(f"          'Overall judgment: a score considering both x and g'\n")
 
 alpha = [sigmoid(c) for c in combined]
-print(f"  STEP 4: sigmoid 적용   = {fmt(alpha, 4)}")
-print(f"          '0~1 사이로 변환: alpha 완성!'\n")
+print(f"  STEP 4: Apply sigmoid    = {fmt(alpha, 4)}")
+print(f"          'Convert to 0~1 range: alpha complete!'\n")
 
-print(f"  결과 해석:")
+print(f"  Interpretation:")
 for j in range(d):
     a = alpha[j]
     if a > 0.7:
-        verdict = f"→ 원본 x 위주 ({a:.0%} x, {1-a:.0%} g)"
+        verdict = f"-> mostly original x ({a:.0%} x, {1-a:.0%} g)"
     elif a < 0.3:
-        verdict = f"→ 기하학 g 위주 ({a:.0%} x, {1-a:.0%} g)"
+        verdict = f"-> mostly geometry g ({a:.0%} x, {1-a:.0%} g)"
     else:
-        verdict = f"→ 골고루 혼합 ({a:.0%} x, {1-a:.0%} g)"
-    print(f"    차원[{j}]: alpha={a:.3f}  {verdict}")
+        verdict = f"-> evenly mixed ({a:.0%} x, {1-a:.0%} g)"
+    print(f"    dim[{j}]: alpha={a:.3f}  {verdict}")
 
 
 # ================================================================
-구분선("1-2. 핵심: alpha는 '상황에 따라 달라진다'")
+section_header("1-2. Key insight: alpha 'varies depending on the situation'")
 # ================================================================
 
 print("""
-  같은 모델이라도 입력이 다르면 alpha가 달라집니다.
-  W_gate_h와 W_gate_g는 고정이지만 x와 g가 바뀌니까요.
+  Even with the same model, different inputs produce different alphas.
+  W_gate_h and W_gate_g are fixed, but x and g change.
 """)
 
-# 상황 A: "hello"의 'o'
+# Scenario A: 'o' in "hello"
 x_A = [0.5, -0.3, 0.8, 0.2]
 g_A = [-0.1, 0.6, 0.1, -0.4]
 alpha_A = [sigmoid(h + gv) for h, gv in
            zip(mat_vec(W_gate_h, x_A), mat_vec(W_gate_g, g_A))]
 
-# 상황 B: "world"의 'd' (다른 x, 다른 g)
+# Scenario B: 'd' in "world" (different x, different g)
 x_B = [-0.4, 0.7, 0.1, 0.5]
 g_B = [0.3, -0.2, 0.5, 0.8]
 alpha_B = [sigmoid(h + gv) for h, gv in
            zip(mat_vec(W_gate_h, x_B), mat_vec(W_gate_g, g_B))]
 
-# 상황 C: 시퀀스 첫 토큰 (g = 영벡터)
+# Scenario C: first token in sequence (g = zero vector)
 x_C = [0.5, -0.3, 0.8, 0.2]
 g_C = [0.0, 0.0, 0.0, 0.0]
 alpha_C = [sigmoid(h + gv) for h, gv in
            zip(mat_vec(W_gate_h, x_C), mat_vec(W_gate_g, g_C))]
 
-print(f"  상황 A: 'hello'의 'o' (문맥 있음)")
+print(f"  Scenario A: 'o' in 'hello' (has context)")
 print(f"    x = {fmt(x_A)},  g = {fmt(g_A)}")
 print(f"    alpha = {fmt(alpha_A)}")
 print()
 
-print(f"  상황 B: 'world'의 'd' (다른 문맥)")
+print(f"  Scenario B: 'd' in 'world' (different context)")
 print(f"    x = {fmt(x_B)},  g = {fmt(g_B)}")
 print(f"    alpha = {fmt(alpha_B)}")
 print()
 
-print(f"  상황 C: 시퀀스 첫 토큰 (문맥 없음, g=0)")
+print(f"  Scenario C: first token in sequence (no context, g=0)")
 print(f"    x = {fmt(x_C)},  g = {fmt(g_C)}")
 print(f"    alpha = {fmt(alpha_C)}")
 
 print(f"""
-  주목할 점:
-    - 같은 W_gate 행렬인데 alpha가 전부 다름!
-    - 상황 C(첫 토큰)에서는 g=0이니까 W_gate_g@g=0
-      → alpha가 오직 x에 의해서만 결정됨
-      → 모델이 자연스럽게 "문맥 없으면 원본만 써" 라고 배울 수 있음
+  Key observations:
+    - Same W_gate matrices but alpha is completely different each time!
+    - In Scenario C (first token), g=0 so W_gate_g @ g = 0
+      -> alpha is determined solely by x
+      -> the model can naturally learn "if no context, just use the original"
 """)
 
 
 # ================================================================
-구분선("1-3. W_gate는 어떻게 학습되나?")
+section_header("1-3. How is W_gate trained?")
 # ================================================================
 
 print("""
-  W_gate_h와 W_gate_g는 역전파(backpropagation)로 학습됩니다.
+  W_gate_h and W_gate_g are trained via backpropagation.
 
-  학습 과정을 비유하면:
+  An analogy for the training process:
 
-  ┌─────────────────────────────────────────────────────────┐
-  │                                                         │
-  │  [Day 1 — 학습 초기]                                    │
-  │   W_gate_h, W_gate_g = 랜덤                             │
-  │   alpha ≈ 0.5 근처 (별 의미 없는 혼합)                   │
-  │   loss = 높음 (예측 엉망)                                │
-  │                                                         │
-  │  [Day 100 — 학습 중기]                                  │
-  │   역전파가 W_gate에 이런 신호를 보냄:                     │
-  │     "차원[1]에서 g를 더 쓰면 loss가 줄어!"               │
-  │   → W_gate가 차원[1]에서 alpha를 낮추도록 조정됨          │
-  │                                                         │
-  │  [Day 1000 — 학습 후기]                                 │
-  │   W_gate가 패턴을 학습함:                                │
-  │     "x가 이런 모양이면 g를 많이 쓰고,                    │
-  │      x가 저런 모양이면 g를 적게 써"                      │
-  │   → alpha가 상황에 맞게 잘 조절됨                        │
-  │   loss = 낮음 (예측 정확)                                │
-  │                                                         │
-  └─────────────────────────────────────────────────────────┘
+  +---------------------------------------------------------+
+  |                                                         |
+  |  [Day 1 -- early training]                              |
+  |   W_gate_h, W_gate_g = random                          |
+  |   alpha ~ around 0.5 (meaningless mixing)               |
+  |   loss = high (predictions are terrible)                |
+  |                                                         |
+  |  [Day 100 -- mid training]                              |
+  |   Backpropagation sends this signal to W_gate:          |
+  |     "Using g more in dim[1] would reduce the loss!"     |
+  |   -> W_gate adjusts to lower alpha in dim[1]            |
+  |                                                         |
+  |  [Day 1000 -- late training]                            |
+  |   W_gate has learned patterns:                          |
+  |     "When x looks like this, use g more,                |
+  |      when x looks like that, use g less"                |
+  |   -> alpha adapts well to each situation                |
+  |   loss = low (predictions are accurate)                 |
+  |                                                         |
+  +---------------------------------------------------------+
 
-  gradient 흐름:
-    loss → output → alpha*x + (1-alpha)*g → alpha → sigmoid
-    → W_gate_h @ x + W_gate_g @ g → W_gate_h, W_gate_g에 gradient 도달!
+  Gradient flow:
+    loss -> output -> alpha*x + (1-alpha)*g -> alpha -> sigmoid
+    -> W_gate_h @ x + W_gate_g @ g -> gradients reach W_gate_h, W_gate_g!
 
-  alpha 자체는 "결과"이지 "파라미터"가 아닙니다.
-  W_gate_h, W_gate_g가 "원인"이고 이것이 학습됩니다.
+  alpha itself is a "result," not a "parameter."
+  W_gate_h, W_gate_g are the "cause" and these are what get trained.
 
-  쉬운 비유:
-    W_gate = "어떤 상황에서 뭘 쓸지 판단하는 '감각'"
-    alpha  = "그 감각으로 지금 이 순간 내린 '결정'"
+  Simple analogy:
+    W_gate = the "intuition" for judging what to use in what situation
+    alpha  = the "decision" made by that intuition at this moment
 
-    감각(W_gate)은 경험(학습)으로 발전하고,
-    결정(alpha)은 매 순간 새로 내려집니다.
+    Intuition (W_gate) develops through experience (training),
+    decisions (alpha) are made fresh each moment.
 """)
 
 
 # ================================================================
 # ================================================================
 # ================================================================
-구분선("PART 2: 차원 축소 — 왜 아무 행렬이나 안 되는가?")
+section_header("PART 2: Dimensionality reduction — Why can't any arbitrary matrix work?")
 # ================================================================
 
 print("""
-  질문: "무슨 행렬을 곱하든 차원만 줄여주면 상관없는 건 아닌 것 같은데"
-  → 정확한 직감입니다. W_red가 뭘 보존하느냐에 따라 결과가 완전히 달라집니다.
+  Question: "It seems like it doesn't work to just multiply any matrix
+  as long as it reduces dimensions"
+  -> Correct intuition. Depending on what W_red preserves, the results
+  are completely different.
 """)
 
 
 # ================================================================
-구분선("2-1. 차원 축소의 본질: '무엇을 버리고 무엇을 남길 것인가'")
+section_header("2-1. The essence of dimensionality reduction: 'What to discard and what to keep'")
 # ================================================================
 
 print("""
-  6차원 벡터를 3차원으로 줄인다 = 정보의 절반을 버린다
+  Reducing a 6D vector to 3D = discarding half the information
 
-  문제는 "어떤 절반을 버리느냐"입니다.
+  The question is "which half to discard."
 
-  비유:
-    6과목(국수영과사체) 성적을 3개로 줄여서 학생을 비교하려고 합니다.
+  Analogy:
+    You want to compare students by reducing 6 subject scores
+    (Korean, Math, English, Science, Social Studies, PE) down to 3.
 
-    방법 A: 국어, 수학, 영어만 남김
-      → 주요 과목 점수로 비교 가능
-      → 과학 천재와 체육 천재는 구분 불가
+    Method A: Keep only Korean, Math, English
+      -> Can compare by major subjects
+      -> Cannot distinguish science prodigies from athletic prodigies
 
-    방법 B: 과학, 사회, 체육만 남김
-      → 부수 과목으로 비교
-      → 국수영 성적 차이가 사라짐
+    Method B: Keep only Science, Social Studies, PE
+      -> Compare by minor subjects
+      -> Differences in Korean/Math/English scores disappear
 
-    방법 C: "문과 성향", "이과 성향", "체력" 으로 변환
-      → 여러 과목을 조합해서 새로운 축을 만듦
-      → 원래 6과목의 핵심 패턴을 3개로 압축!
+    Method C: Transform into "humanities aptitude", "science aptitude", "fitness"
+      -> Combine multiple subjects to create new axes
+      -> Compress the core patterns of all 6 subjects into 3!
 
-  W_red는 방법 C입니다.
-  단순히 일부 차원을 골라서 버리는 게 아니라,
-  여러 차원을 "조합"해서 새로운 축을 만듭니다.
+  W_red is Method C.
+  Rather than simply picking some dimensions to discard,
+  it "combines" multiple dimensions to create new axes.
 """)
 
 
 # ================================================================
-구분선("2-2. 실험: 같은 토큰인데 W_red에 따라 Plucker가 달라진다")
+section_header("2-2. Experiment: same tokens but Plucker differs depending on W_red")
 # ================================================================
 
 d = 6
 r = 3
 
-# 두 토큰의 임베딩
-x_cat = [0.9, 0.1, 0.8, 0.2, 0.7, 0.3]   # '고양이' 느낌 (홀수 차원 높음)
-x_dog = [0.2, 0.8, 0.3, 0.7, 0.4, 0.6]   # '강아지' 느낌 (짝수 차원 높음)
-x_cat2= [0.85, 0.15, 0.75, 0.25, 0.65, 0.35]  # '고양이'와 비슷 (약간 다름)
+# Embeddings for two tokens
+x_cat = [0.9, 0.1, 0.8, 0.2, 0.7, 0.3]   # 'cat' feel (odd-indexed dims high)
+x_dog = [0.2, 0.8, 0.3, 0.7, 0.4, 0.6]   # 'dog' feel (even-indexed dims high)
+x_cat2= [0.85, 0.15, 0.75, 0.25, 0.65, 0.35]  # similar to 'cat' (slightly different)
 
-print(f"  토큰 A '고양이':    {fmt(x_cat)}")
-print(f"  토큰 B '강아지':    {fmt(x_dog)}")
-print(f"  토큰 C '고양이2':   {fmt(x_cat2)}  (A와 비슷)")
+print(f"  Token A 'cat':     {fmt(x_cat)}")
+print(f"  Token B 'dog':     {fmt(x_dog)}")
+print(f"  Token C 'cat2':    {fmt(x_cat2)}  (similar to A)")
 
 print(f"""
-  직관적으로:
-    A-C 쌍 (고양이끼리) → "비슷한 관계"를 포착해야 함
-    A-B 쌍 (고양이-강아지) → "다른 관계"를 포착해야 함
+  Intuitively:
+    A-C pair (cats together) -> should capture a "similar relationship"
+    A-B pair (cat-dog)       -> should capture a "different relationship"
 
-  좋은 W_red라면 이 차이가 Plucker 좌표에 뚜렷하게 나타나야 합니다.
+  A good W_red should make this difference clearly visible in Plucker coordinates.
 """)
 
-# --- W_red 1: 좋은 행렬 (토큰 간 차이를 보존하는 프로젝션) ---
-# 각 행이 서로 다른 "관점"에서 벡터를 봄
+# --- W_red 1: Good matrix (projection that preserves inter-token differences) ---
+# Each row looks at the vector from a different "perspective"
 W_red_good = [
-    [ 1.0, -1.0,  0.0,  0.0,  0.0,  0.0],   # 차원0 vs 차원1의 차이
-    [ 0.0,  0.0,  1.0, -1.0,  0.0,  0.0],   # 차원2 vs 차원3의 차이
-    [ 0.0,  0.0,  0.0,  0.0,  1.0, -1.0],   # 차원4 vs 차원5의 차이
+    [ 1.0, -1.0,  0.0,  0.0,  0.0,  0.0],   # dim0 vs dim1 difference
+    [ 0.0,  0.0,  1.0, -1.0,  0.0,  0.0],   # dim2 vs dim3 difference
+    [ 0.0,  0.0,  0.0,  0.0,  1.0, -1.0],   # dim4 vs dim5 difference
 ]
-# 고양이: 홀수 인덱스 높음 → 차이가 양수
-# 강아지: 짝수 인덱스 높음 → 차이가 음수 → z 방향이 확 달라짐!
+# cat: odd indices high -> differences are positive
+# dog: even indices high -> differences are negative -> z directions are very different!
 
-# --- W_red 2: 나쁜 행렬 (차이를 뭉개는 프로젝션) ---
+# --- W_red 2: Bad matrix (projection that collapses differences) ---
 W_red_bad = [
-    [ 0.3,  0.3,  0.3,  0.3,  0.3,  0.3],   # 그냥 전체 평균
-    [ 0.31, 0.29, 0.3,  0.3,  0.3,  0.3],   # 거의 같은 평균
-    [ 0.3,  0.3,  0.31, 0.29, 0.3,  0.3],   # 또 거의 같은 평균
+    [ 0.3,  0.3,  0.3,  0.3,  0.3,  0.3],   # just the overall average
+    [ 0.31, 0.29, 0.3,  0.3,  0.3,  0.3],   # nearly the same average
+    [ 0.3,  0.3,  0.31, 0.29, 0.3,  0.3],   # yet another nearly identical average
 ]
-# 모든 차원을 비슷한 가중치로 합침 → 고양이든 강아지든 비슷한 값
+# Sums all dimensions with similar weights -> cat and dog end up similar
 
 def compute_plucker(u, v):
     coords = []
@@ -300,227 +303,248 @@ def compute_plucker(u, v):
     return [p/norm for p in coords]
 
 def plucker_distance(p1, p2):
-    """두 정규화된 Plucker 벡터 사이의 거리 (작을수록 비슷)"""
+    """Distance between two normalized Plucker vectors (smaller = more similar)"""
     return math.sqrt(sum((a-b)**2 for a, b in zip(p1, p2)))
 
-print(f"  ── 실험: 좋은 W_red vs 나쁜 W_red ──\n")
+print(f"  -- Experiment: Good W_red vs Bad W_red --\n")
 
-for name, W_red in [("좋은 W_red", W_red_good), ("나쁜 W_red", W_red_bad)]:
+for name, W_red in [("Good W_red", W_red_good), ("Bad W_red", W_red_bad)]:
     z_A = mat_vec(W_red, x_cat)
     z_B = mat_vec(W_red, x_dog)
     z_C = mat_vec(W_red, x_cat2)
 
-    plucker_AB = compute_plucker(z_A, z_B)  # 고양이-강아지
-    plucker_AC = compute_plucker(z_A, z_C)  # 고양이-고양이2
+    plucker_AB = compute_plucker(z_A, z_B)  # cat-dog
+    plucker_AC = compute_plucker(z_A, z_C)  # cat-cat2
 
     dist = plucker_distance(plucker_AB, plucker_AC)
 
     print(f"  [{name}]")
-    print(f"    z_고양이  = {fmt(z_A)}")
-    print(f"    z_강아지  = {fmt(z_B)}")
-    print(f"    z_고양이2 = {fmt(z_C)}")
-    print(f"    Plucker(고양이, 강아지)  = {fmt(plucker_AB, 4)}")
-    print(f"    Plucker(고양이, 고양이2) = {fmt(plucker_AC, 4)}")
-    print(f"    두 Plucker 사이 거리 = {dist:.4f}")
+    print(f"    z_cat   = {fmt(z_A)}")
+    print(f"    z_dog   = {fmt(z_B)}")
+    print(f"    z_cat2  = {fmt(z_C)}")
+    print(f"    Plucker(cat, dog)   = {fmt(plucker_AB, 4)}")
+    print(f"    Plucker(cat, cat2)  = {fmt(plucker_AC, 4)}")
+    print(f"    Distance between Pluckers = {dist:.4f}")
     if dist > 0.3:
-        print(f"    → 거리 큼! '다른 관계 vs 비슷한 관계'를 잘 구분함 ✓")
+        print(f"    -> Large distance! Distinguishes 'different relationship vs similar relationship' well")
     else:
-        print(f"    → 거리 작음! 다른 관계도 비슷하게 보임 ✗")
+        print(f"    -> Small distance! Even different relationships look similar")
     print()
 
 
 # ================================================================
-구분선("2-3. 왜 이런 차이가 나는가? — 기하학적 설명")
+section_header("2-3. Why does this difference arise? — A geometric explanation")
 # ================================================================
 
 print("""
-  Plucker 좌표 = 두 벡터가 만드는 '평면의 방향'
+  Plucker coordinates = the 'direction of the plane' spanned by two vectors
 
-  핵심: W_red로 차원을 줄이면, 벡터들이 3차원 공간에 '사영'됩니다.
-  이때 사영하는 방법에 따라 벡터들 사이의 관계가 보존되거나 뭉개집니다.
+  Key: When W_red reduces dimensions, vectors are 'projected' into 3D space.
+  Depending on how the projection is done, relationships between vectors
+  are either preserved or collapsed.
 
-  ┌─────────────────────────────────────────────────────────────┐
-  │                                                             │
-  │  [좋은 W_red]                                               │
-  │                                                             │
-  │  원래 6차원에서 고양이와 강아지가 다른 방향이었는데,          │
-  │  3차원으로 줄여도 여전히 다른 방향으로 남아있음.              │
-  │                                                             │
-  │  3차원 공간에서:                                             │
-  │    z_고양이  → 윗쪽 방향                                     │
-  │    z_강아지  → 옆쪽 방향                                     │
-  │    z_고양이2 → 윗쪽 방향 (z_고양이와 비슷)                   │
-  │                                                             │
-  │  → Plucker가 이 차이를 포착!                                │
-  │    (고양이-강아지)가 만드는 평면 ≠ (고양이-고양이2)의 평면   │
-  │                                                             │
-  ├─────────────────────────────────────────────────────────────┤
-  │                                                             │
-  │  [나쁜 W_red]                                               │
-  │                                                             │
-  │  모든 차원을 비슷한 가중치로 평균 → 차이가 뭉개짐            │
-  │                                                             │
-  │  3차원 공간에서:                                             │
-  │    z_고양이  → 한 방향                                       │
-  │    z_강아지  → 거의 같은 방향 (!!)                           │
-  │    z_고양이2 → 거의 같은 방향 (!!)                           │
-  │                                                             │
-  │  → 세 벡터가 비슷한 방향이 되어버림                          │
-  │  → Plucker가 관계 차이를 구분하지 못함                       │
-  │                                                             │
-  └─────────────────────────────────────────────────────────────┘
+  +-------------------------------------------------------------+
+  |                                                              |
+  |  [Good W_red]                                                |
+  |                                                              |
+  |  Cat and dog pointed in different directions in the original |
+  |  6D space, and they remain in different directions even      |
+  |  after reduction to 3D.                                      |
+  |                                                              |
+  |  In 3D space:                                                |
+  |    z_cat   -> upward direction                               |
+  |    z_dog   -> sideways direction                             |
+  |    z_cat2  -> upward direction (similar to z_cat)            |
+  |                                                              |
+  |  -> Plucker captures this difference!                        |
+  |    (cat-dog) plane != (cat-cat2) plane                       |
+  |                                                              |
+  +-------------------------------------------------------------+
+  |                                                              |
+  |  [Bad W_red]                                                 |
+  |                                                              |
+  |  Averaging all dimensions with similar weights               |
+  |  -> differences get collapsed                                |
+  |                                                              |
+  |  In 3D space:                                                |
+  |    z_cat   -> one direction                                  |
+  |    z_dog   -> nearly the same direction (!!)                 |
+  |    z_cat2  -> nearly the same direction (!!)                 |
+  |                                                              |
+  |  -> All three vectors end up in similar directions           |
+  |  -> Plucker cannot distinguish the relationship differences  |
+  |                                                              |
+  +-------------------------------------------------------------+
 
-  비유:
-    좋은 W_red = 좋은 카메라 각도
-      3D 물체를 2D 사진으로 찍을 때, 각도가 좋으면 형태가 잘 보임
+  Analogy:
+    Good W_red = a good camera angle
+      When photographing a 3D object as a 2D image, a good angle
+      reveals the shape well
 
-    나쁜 W_red = 나쁜 카메라 각도
-      정면에서만 찍으면 원기둥이나 구나 똑같이 보임
-      옆에서도 찍어야 차이가 보이는데, 정면만 반복해서 찍는 꼴
+    Bad W_red = a bad camera angle
+      Shooting only from the front makes a cylinder and a sphere
+      look the same; you need a side view to see the difference,
+      but you keep shooting from the front
 """)
 
 
 # ================================================================
-구분선("2-4. 그래서 W_red는 어떻게 '좋은 행렬'이 되는가?")
+section_header("2-4. So how does W_red become a 'good matrix'?")
 # ================================================================
 
 print("""
-  답: 학습(backpropagation)을 통해서!
+  Answer: Through training (backpropagation)!
 
-  gradient가 흐르는 경로:
+  Path of gradient flow:
 
     loss
-     ↓ (예측이 틀렸다!)
+     | (the prediction was wrong!)
     output = alpha*x + (1-alpha)*g
-     ↓
+     |
     g = W_plu @ plucker
-     ↓
+     |
     plucker = compute_plucker(z, z_prev)
-     ↓ ↓
+     | |
     z = W_red @ x        z_prev = W_red @ x_prev
-     ↓                    ↓
-    W_red에 gradient 도달!
+     |                    |
+    Gradient reaches W_red!
 
-  W_red가 받는 gradient의 의미:
-    "지금 이 W_red 때문에 Plucker가 이렇게 나왔는데,
-     그 Plucker가 g를 만들고, g가 출력에 섞여서,
-     결국 예측이 이만큼 틀렸어.
-     W_red를 이 방향으로 조금 바꾸면 loss가 줄어들 거야."
+  What the gradient to W_red means:
+    "Because of this W_red, Plucker came out like this,
+     that Plucker produced g, and g was mixed into the output,
+     which ultimately made the prediction off by this much.
+     Adjusting W_red in this direction will reduce the loss."
 
-  학습이 진행되면:
-    → W_red가 "토큰 간 관계를 잘 드러내는 축소"를 하도록 진화
-    → 의미적으로 비슷한 토큰은 비슷한 z, 다른 토큰은 다른 z
-    → Plucker가 의미있는 관계를 포착하게 됨
+  As training progresses:
+    -> W_red evolves to perform "reduction that reveals inter-token relationships"
+    -> Semantically similar tokens get similar z, different tokens get different z
+    -> Plucker captures meaningful relationships
 """)
 
 
 # ================================================================
-구분선("2-5. 차원 축소의 3가지 역할")
+section_header("2-5. Three roles of dimensionality reduction")
 # ================================================================
 
 print("""
-  W_red는 단순히 "차원을 줄이는 것"이 아니라, 3가지 역할을 동시에 합니다:
+  W_red is not simply "reducing dimensions" -- it simultaneously performs 3 roles:
 
-  ┌──────────────────────────────────────────────────────────────┐
-  │                                                              │
-  │  역할 1: 계산 비용 절감                                       │
-  │    d=16 → r=4로 줄이면 Plucker 차원이 C(16,2)=120 → C(4,2)=6 │
-  │    계산량이 20배 줄어듬                                        │
-  │                                                              │
-  │  역할 2: "비교에 중요한 특성" 추출                              │
-  │    16개 특성 중 관계 비교에 필요한 핵심 패턴 4개를 뽑아냄        │
-  │    잡음(noise) 차원은 자연스럽게 제거                            │
-  │                                                              │
-  │    비유: 사람을 비교할 때 16가지 특성 중                        │
-  │    "키/체중/나이/성별" 4가지만 보면 체형 비교는 충분한 것처럼    │
-  │    W_red가 "관계 비교에 필요한 4가지"를 학습으로 찾아냄          │
-  │                                                              │
-  │  역할 3: Plucker가 작동할 수 있는 공간으로 변환                  │
-  │    Plucker 좌표 = "두 벡터가 만드는 평면의 방향"                 │
-  │    이게 의미있으려면 벡터들이 적절한 공간에 있어야 함             │
-  │                                                              │
-  │    나쁜 공간: 모든 벡터가 거의 같은 방향 → 평면 차이 없음       │
-  │    좋은 공간: 벡터들이 다양한 방향 → 평면 차이가 뚜렷           │
-  │                                                              │
-  │    W_red가 "Plucker가 잘 작동하는 공간"으로 보내주는 역할       │
-  │                                                              │
-  └──────────────────────────────────────────────────────────────┘
+  +--------------------------------------------------------------+
+  |                                                              |
+  |  Role 1: Computational cost reduction                        |
+  |    d=16 -> r=4 reduces Plucker dim from C(16,2)=120 to      |
+  |    C(4,2)=6. A 20x reduction in computation.                 |
+  |                                                              |
+  |  Role 2: Extracting "features important for comparison"      |
+  |    Picks out the 4 core patterns needed for relationship     |
+  |    comparison from 16 features.                              |
+  |    Noise dimensions are naturally removed.                   |
+  |                                                              |
+  |    Analogy: When comparing people, out of 16 traits,         |
+  |    "height/weight/age/sex" -- just 4 -- are enough for       |
+  |    body-type comparison. W_red learns to find the            |
+  |    "4 things needed for relationship comparison."            |
+  |                                                              |
+  |  Role 3: Transforming into a space where Plucker works       |
+  |    Plucker coordinates = "direction of the plane spanned     |
+  |    by two vectors."                                          |
+  |    For this to be meaningful, vectors must be in a proper    |
+  |    space.                                                    |
+  |                                                              |
+  |    Bad space: all vectors nearly same direction -> no plane  |
+  |               difference                                     |
+  |    Good space: vectors in diverse directions -> clear plane  |
+  |                differences                                   |
+  |                                                              |
+  |    W_red plays the role of sending vectors into a "space     |
+  |    where Plucker works well."                                |
+  |                                                              |
+  +--------------------------------------------------------------+
 """)
 
 
 # ================================================================
-구분선("2-6. Attention의 Q, K와의 비교")
+section_header("2-6. Comparison with Attention's Q, K")
 # ================================================================
 
 print("""
-  사실 Attention에서도 비슷한 일이 일어납니다.
+  In fact, something similar happens in Attention.
 
-  ┌─── Attention ───────────────────────────────────────────────┐
-  │                                                             │
-  │  Q = W_q @ x     ← x를 "질문 공간"으로 프로젝션              │
-  │  K = W_k @ x     ← x를 "답변 공간"으로 프로젝션              │
-  │  score = Q . K    ← 두 공간에서의 내적 (스칼라)              │
-  │                                                             │
-  │  W_q, W_k도 학습됩니다.                                      │
-  │  "비교에 적합한 공간"으로 보내는 역할.                         │
-  │  아무 행렬이나 쓰면 안 되는 건 마찬가지!                       │
-  │                                                             │
-  ├─── Grassmann ───────────────────────────────────────────────┤
-  │                                                             │
-  │  z = W_red @ x     ← x를 "기하학 공간"으로 프로젝션           │
-  │  z_prev = W_red @ x_prev  ← 같은 공간으로                   │
-  │  plucker = Plucker(z, z_prev)  ← 두 벡터의 관계 (벡터!)     │
-  │                                                             │
-  │  W_red도 학습됩니다.                                         │
-  │  "기하학적 비교에 적합한 공간"으로 보내는 역할.                │
-  │                                                             │
-  └─────────────────────────────────────────────────────────────┘
+  +--- Attention -------------------------------------------------+
+  |                                                               |
+  |  Q = W_q @ x     <- project x into "query space"             |
+  |  K = W_k @ x     <- project x into "key space"               |
+  |  score = Q . K    <- dot product in those spaces (scalar)     |
+  |                                                               |
+  |  W_q, W_k are also learned.                                   |
+  |  Their role: sending to a "space suitable for comparison."     |
+  |  Using arbitrary matrices won't work -- same principle!        |
+  |                                                               |
+  +--- Grassmann -------------------------------------------------+
+  |                                                               |
+  |  z = W_red @ x         <- project x into "geometry space"     |
+  |  z_prev = W_red @ x_prev  <- into the same space              |
+  |  plucker = Plucker(z, z_prev)  <- relationship (a vector!)    |
+  |                                                               |
+  |  W_red is also learned.                                        |
+  |  Its role: sending to a "space suitable for geometric          |
+  |  comparison."                                                  |
+  |                                                               |
+  +---------------------------------------------------------------+
 
-  차이점:
-    Attention: 2개의 행렬(W_q, W_k)로 각각 다른 공간으로 프로젝션
-    Grassmann: 1개의 행렬(W_red)로 같은 공간으로 프로젝션
+  Differences:
+    Attention: 2 matrices (W_q, W_k) project into separate spaces
+    Grassmann: 1 matrix (W_red) projects into the same space
 
-    Attention: 관계 = 내적(스칼라 1개)
-    Grassmann: 관계 = Plucker(벡터 C(r,2)개)
+    Attention: relationship = dot product (1 scalar)
+    Grassmann: relationship = Plucker (C(r,2) vector components)
 
-  W_red 하나로 충분한 이유:
-    Plucker 좌표 자체가 이미 "비대칭적"입니다.
-    p_ij = u_i*v_j - u_j*v_i 에서 u와 v의 역할이 다르거든요.
-    (u와 v를 바꾸면 부호가 바뀜!)
-    그래서 같은 공간에 있어도 방향 정보가 보존됩니다.
+  Why one W_red is sufficient:
+    Plucker coordinates are inherently "asymmetric."
+    In p_ij = u_i*v_j - u_j*v_i, u and v play different roles.
+    (Swapping u and v flips the sign!)
+    So even in the same space, directional information is preserved.
 """)
 
 
 # ================================================================
-구분선("최종 요약")
+section_header("Final summary")
 # ================================================================
 
 print("""
-  ┌────────────────────────────────────────────────────────────┐
-  │                                                            │
-  │  Q: alpha는 어떻게 결정되나?                                │
-  │                                                            │
-  │  A: alpha = sigmoid(W_gate_h @ x + W_gate_g @ g)          │
-  │     - W_gate_h, W_gate_g: 학습되는 행렬 (경험으로 발전)    │
-  │     - alpha: 매 토큰마다 새로 계산되는 값 (순간의 판단)     │
-  │     - x와 g를 둘 다 보고 "차원별로" 혼합 비율을 결정        │
-  │     - 학습 초기: 대충 0.5 (아무렇게나 섞음)                │
-  │     - 학습 후기: 상황에 맞게 정밀하게 조절                  │
-  │                                                            │
-  ├────────────────────────────────────────────────────────────┤
-  │                                                            │
-  │  Q: 차원 축소에서 아무 행렬이나 되나?                        │
-  │                                                            │
-  │  A: 안 됩니다!                                              │
-  │     W_red는 학습을 통해 3가지를 동시에 수행합니다:           │
-  │       1. 계산 비용 절감 (차원 축소)                         │
-  │       2. 관계 비교에 핵심적인 특성 추출                     │
-  │       3. Plucker가 의미있게 작동하는 공간으로 변환           │
-  │                                                            │
-  │     랜덤 행렬 → 의미없는 축소 → Plucker가 쓸모없는 값 출력  │
-  │     학습된 행렬 → 핵심 추출 → Plucker가 관계를 잘 포착       │
-  │                                                            │
-  │     Attention의 W_q, W_k가 학습으로 좋아지는 것과 같은 원리! │
-  │                                                            │
-  └────────────────────────────────────────────────────────────┘
+  +------------------------------------------------------------+
+  |                                                            |
+  |  Q: How is alpha determined?                               |
+  |                                                            |
+  |  A: alpha = sigmoid(W_gate_h @ x + W_gate_g @ g)          |
+  |     - W_gate_h, W_gate_g: learned matrices (develop        |
+  |       through experience)                                  |
+  |     - alpha: a value computed fresh for each token          |
+  |       (a momentary decision)                               |
+  |     - Looks at both x and g to decide mixing ratio         |
+  |       "per dimension"                                      |
+  |     - Early training: roughly 0.5 (mixed arbitrarily)      |
+  |     - Late training: precisely tuned per situation          |
+  |                                                            |
+  +------------------------------------------------------------+
+  |                                                            |
+  |  Q: Can any matrix work for dimensionality reduction?      |
+  |                                                            |
+  |  A: No!                                                    |
+  |     W_red simultaneously performs 3 things via training:    |
+  |       1. Computational cost reduction (fewer dimensions)   |
+  |       2. Extracting features critical for relationship     |
+  |          comparison                                        |
+  |       3. Transforming into a space where Plucker           |
+  |          produces meaningful output                        |
+  |                                                            |
+  |     Random matrix -> meaningless reduction -> Plucker      |
+  |       outputs useless values                               |
+  |     Trained matrix -> core extraction -> Plucker captures  |
+  |       relationships well                                   |
+  |                                                            |
+  |     Same principle as Attention's W_q, W_k improving       |
+  |     through training!                                      |
+  |                                                            |
+  +------------------------------------------------------------+
 """)

@@ -1,13 +1,13 @@
 """
-tutorial.py — Attention과 Grassmann을 처음부터 이해하기
+tutorial.py -- Understanding Attention and Grassmann from Scratch
 =========================================================
-이 파일은 실행하면서 읽는 튜토리얼입니다.
-각 단계마다 실제 숫자를 출력해서 "무슨 일이 일어나는지" 눈으로 확인합니다.
+This file is a tutorial meant to be read while running.
+At each step, actual numbers are printed so you can see "what's happening" firsthand.
 
-사용법:
+Usage:
   python3 tutorial.py
 
-선수 지식: Python 기초만 알면 됩니다.
+Prerequisites: Basic Python knowledge is all you need.
 =========================================================
 """
 
@@ -15,53 +15,53 @@ import math
 import random
 random.seed(42)
 
-def 구분선(title):
+def separator(title):
     print(f"\n{'='*60}")
     print(f"  {title}")
     print(f"{'='*60}\n")
 
 # ================================================================
-구분선("STEP 1: 우리가 풀려는 문제")
+separator("STEP 1: The Problem We're Trying to Solve")
 # ================================================================
 
 print("""
-  우리의 목표: "다음 글자 맞추기" 게임
+  Our goal: A "predict the next character" game
 
-  예시: 이름 "emma"를 학습한다고 합시다.
+  Example: Let's say we're learning the name "emma".
 
-    [시작] → 다음 글자는? → 'e'   (이름의 첫 글자)
-    'e'   → 다음 글자는? → 'm'
-    'e','m' → 다음 글자는? → 'm'
-    'e','m','m' → 다음 글자는? → 'a'
-    'e','m','m','a' → 다음 글자는? → [끝]
+    [start] -> next character? -> 'e'   (first letter of the name)
+    'e'     -> next character? -> 'm'
+    'e','m' -> next character? -> 'm'
+    'e','m','m' -> next character? -> 'a'
+    'e','m','m','a' -> next character? -> [end]
 
-  핵심 질문:
-    "이전 글자들을 보고 다음 글자를 어떻게 예측할까?"
+  Key question:
+    "How do we predict the next character given the previous characters?"
 
-  이전 글자 정보를 활용하는 방법이 바로
-  Attention과 Grassmann의 차이점입니다.
+  The way we use information from previous characters is exactly
+  the difference between Attention and Grassmann.
 """)
 
 
 # ================================================================
-구분선("STEP 2: 글자를 숫자로 바꾸기 (임베딩)")
+separator("STEP 2: Converting Characters to Numbers (Embedding)")
 # ================================================================
 
 print("""
-  컴퓨터는 글자를 모릅니다. 숫자만 압니다.
-  그래서 각 글자를 "숫자 벡터"로 바꿔야 합니다.
+  Computers don't understand characters. They only understand numbers.
+  So we need to convert each character into a "numeric vector".
 
-  벡터란? 그냥 숫자 리스트입니다.
-    'h' → [0.3, -0.1, 0.7]    (3차원 벡터)
-    'e' → [0.5,  0.2, -0.4]
-    'l' → [-0.2, 0.8, 0.1]
+  What's a vector? Just a list of numbers.
+    'h' -> [0.3, -0.1, 0.7]    (3-dimensional vector)
+    'e' -> [0.5,  0.2, -0.4]
+    'l' -> [-0.2, 0.8, 0.1]
 
-  이 숫자들은 처음에는 랜덤이지만,
-  학습하면서 "비슷한 글자는 비슷한 벡터"를 갖게 됩니다.
+  These numbers are random at first,
+  but through training, "similar characters get similar vectors".
 """)
 
-# 실제 예시
-print("  실제 예시 (4차원 벡터):")
+# Actual example
+print("  Actual example (4-dimensional vectors):")
 embeds = {
     'h': [0.3, -0.1, 0.7, 0.2],
     'e': [0.5,  0.2, -0.4, 0.6],
@@ -69,39 +69,39 @@ embeds = {
     'o': [0.1, -0.5, 0.3, 0.9],
 }
 for ch, vec in embeds.items():
-    print(f"    '{ch}' → {vec}")
+    print(f"    '{ch}' -> {vec}")
 
 
 # ================================================================
-구분선("STEP 3: 핵심 문제 — 이전 글자 정보를 어떻게 쓸까?")
+separator("STEP 3: The Core Problem -- How Do We Use Previous Character Information?")
 # ================================================================
 
 print("""
-  "hello"에서 'l' 다음 글자를 예측한다고 합시다.
-  현재 위치의 글자는 'l'이고, 이전에 'h', 'e', 'l'이 있었습니다.
+  Let's say we're predicting the next character after 'l' in "hello".
+  The current character is 'l', and the previous characters were 'h', 'e', 'l'.
 
-  가장 단순한 방법: 현재 글자 'l'만 보고 예측
-    → 문제: 'l' 다음에 뭐가 올지는 앞 문맥에 따라 다름!
-       "hello"의 'l' 다음은 'l'이고
-       "help"의 'l' 다음은 'p'입니다.
-    → 이전 글자들의 정보가 필요합니다.
+  Simplest approach: predict using only the current character 'l'
+    -> Problem: what comes after 'l' depends on the preceding context!
+       In "hello", the character after the first 'l' is 'l'
+       In "help", the character after 'l' is 'p'.
+    -> We need information from previous characters.
 
-  그럼 이전 글자 정보를 어떻게 현재 글자에 합칠까?
-  여기서 세 가지 방법이 갈립니다:
+  So how do we combine previous character information with the current one?
+  This is where three approaches diverge:
 
-  방법 1: 단순 평균  (너무 단순함)
-  방법 2: Attention  (Transformer의 핵심)
-  방법 3: Grassmann  (이 논문의 제안)
+  Approach 1: Simple average  (too simple)
+  Approach 2: Attention       (the core of Transformers)
+  Approach 3: Grassmann       (proposed by this paper)
 """)
 
 
 # ================================================================
-구분선("STEP 4: 방법 1 — 단순 평균 (Baseline)")
+separator("STEP 4: Approach 1 -- Simple Average (Baseline)")
 # ================================================================
 
 print("""
-  가장 단순한 아이디어:
-  "이전 글자들의 벡터를 그냥 평균내서 현재에 합치자"
+  The simplest idea:
+  "Just average the vectors of the previous characters and combine with the current one"
 """)
 
 h_vec = embeds['h']
@@ -109,73 +109,73 @@ e_vec = embeds['e']
 l_vec = embeds['l']
 
 avg = [sum(vs)/3 for vs in zip(h_vec, e_vec, l_vec)]
-print(f"  'h' 벡터: {h_vec}")
-print(f"  'e' 벡터: {e_vec}")
-print(f"  'l' 벡터: {l_vec}")
-print(f"  단순 평균: {[round(x, 3) for x in avg]}")
+print(f"  'h' vector: {h_vec}")
+print(f"  'e' vector: {e_vec}")
+print(f"  'l' vector: {l_vec}")
+print(f"  Simple average: {[round(x, 3) for x in avg]}")
 
 print("""
-  문제점:
-    모든 이전 글자를 "동등하게" 취급합니다.
-    하지만 실제로는 어떤 글자가 더 중요할 수 있죠.
-    예: "hello"에서 'l' 예측 시, 바로 앞의 'l'이
-        멀리 있는 'h'보다 더 중요할 수 있습니다.
+  Problem:
+    It treats all previous characters "equally".
+    But in practice, some characters may be more important.
+    Example: when predicting after 'l' in "hello", the immediately
+        preceding 'l' may be more important than the distant 'h'.
 """)
 
 
 # ================================================================
-구분선("STEP 5: 방법 2 — Attention (가중 평균)")
+separator("STEP 5: Approach 2 -- Attention (Weighted Average)")
 # ================================================================
 
 print("""
-  Attention의 핵심 아이디어:
-  "이전 글자들의 평균을 내되, 중요한 글자에 더 큰 가중치를 주자"
+  The core idea of Attention:
+  "Average the previous characters, but give higher weight to the important ones"
 
-  어떻게?
-  1) 현재 글자에서 "나는 이런 정보가 필요해" 라는 신호를 만듦 → Query (Q)
-  2) 각 이전 글자는 "나는 이런 정보를 갖고 있어" 라는 신호를 만듦 → Key (K)
-  3) Q와 K를 비교(내적)해서 "얼마나 관련 있는지" 점수를 매김
-  4) 점수가 높은 글자의 Value (V)를 더 많이 가져옴
+  How?
+  1) The current character creates a signal: "I need this kind of info" -> Query (Q)
+  2) Each previous character creates a signal: "I have this kind of info" -> Key (K)
+  3) Compare Q and K (dot product) to compute a "relevance score"
+  4) Take more Value (V) from characters with higher scores
 """)
 
-# ── 구체적으로 보여줍시다 ──
+# -- Let's show this concretely --
 
-print("  구체적 계산 (현재 글자: 'l', 이전 글자들: 'h', 'e', 'l'):\n")
+print("  Concrete computation (current char: 'l', previous chars: 'h', 'e', 'l'):\n")
 
-# 간단한 "프로젝션" (실제로는 행렬곱이지만, 여기선 직관적으로)
-# Query: 현재 글자 'l'이 "이런 정보가 필요해"
-q = l_vec   # 실제로는 W_q @ l_vec
-print(f"  1) Query (현재 'l'이 필요한 정보): {q}")
+# Simple "projection" (in practice it's a matrix multiply, but here we keep it intuitive)
+# Query: current character 'l' saying "I need this kind of info"
+q = l_vec   # In practice: W_q @ l_vec
+print(f"  1) Query (info that current 'l' needs): {q}")
 
-# Key: 각 이전 글자가 "이런 정보를 갖고 있어"
-keys = {'h': h_vec, 'e': e_vec, 'l': l_vec}  # 실제로는 W_k @ vec
-print(f"  2) Keys (각 글자가 가진 정보):")
+# Key: each previous character saying "I have this kind of info"
+keys = {'h': h_vec, 'e': e_vec, 'l': l_vec}  # In practice: W_k @ vec
+print(f"  2) Keys (info each character has):")
 for ch, k in keys.items():
     print(f"     '{ch}': {k}")
 
-# 내적: Q와 K의 유사도 점수
-print(f"\n  3) 유사도 점수 (Q와 각 K의 내적):")
+# Dot product: similarity scores between Q and K
+print(f"\n  3) Similarity scores (dot product of Q with each K):")
 scores = {}
 for ch, k in keys.items():
-    # 내적 = 대응하는 원소끼리 곱한 후 합산
+    # Dot product = multiply corresponding elements and sum
     dot = sum(qi * ki for qi, ki in zip(q, k))
     scores[ch] = dot
     detail = " + ".join(f"{qi:.1f}*{ki:.1f}" for qi, ki in zip(q, k))
     print(f"     Q . K_{ch} = {detail} = {dot:.3f}")
 
-print(f"\n     결과: {', '.join(f'{ch}:{s:.3f}' for ch, s in scores.items())}")
+print(f"\n     Results: {', '.join(f'{ch}:{s:.3f}' for ch, s in scores.items())}")
 
-# softmax로 가중치 변환
-print(f"\n  4) Softmax (점수를 0~1 가중치로 변환, 합=1):")
+# Convert to weights with softmax
+print(f"\n  4) Softmax (convert scores to 0~1 weights, sum=1):")
 max_s = max(scores.values())
 exp_scores = {ch: math.exp(s - max_s) for ch, s in scores.items()}
 total = sum(exp_scores.values())
 weights = {ch: e / total for ch, e in exp_scores.items()}
 for ch, w in weights.items():
-    print(f"     '{ch}': {w:.3f}  {'<-- 가장 높음!' if w == max(weights.values()) else ''}")
+    print(f"     '{ch}': {w:.3f}  {'<-- highest!' if w == max(weights.values()) else ''}")
 
-# 가중 평균
-print(f"\n  5) 가중 평균 (중요한 글자에 더 큰 비중):")
+# Weighted average
+print(f"\n  5) Weighted average (higher weight on important characters):")
 weighted = [0.0] * 4
 for ch, w in weights.items():
     vec = embeds[ch]
@@ -187,164 +187,166 @@ print(f"     + {weights['e']:.3f}*{e_vec} (e)")
 print(f"     + {weights['l']:.3f}*{l_vec} (l)")
 print(f"     = {[round(x, 3) for x in weighted]}")
 
-print(f"\n  비교:")
-print(f"     단순 평균:   {[round(x, 3) for x in avg]}")
-print(f"     Attention:   {[round(x, 3) for x in weighted]}")
-print(f"     → Attention은 관련성 높은 글자에 가중치를 더 줍니다!")
+print(f"\n  Comparison:")
+print(f"     Simple average: {[round(x, 3) for x in avg]}")
+print(f"     Attention:      {[round(x, 3) for x in weighted]}")
+print(f"     -> Attention gives more weight to more relevant characters!")
 
 print("""
-  정리:
-  ┌──────────────────────────────────────────────┐
-  │  Attention = "누구한테 얼마나 물어볼까?"       │
-  │                                                │
-  │  Q (Query)  = "나는 이런 게 궁금해"            │
-  │  K (Key)    = "나는 이런 걸 알아"              │
-  │  V (Value)  = "내 정보는 이거야"               │
-  │  Score      = Q . K (얼마나 관련 있나?)         │
-  │  Weight     = softmax(Score) (확률로 변환)      │
-  │  Output     = Weight x V (가중 평균)            │
-  └──────────────────────────────────────────────┘
+  Summary:
+  +----------------------------------------------+
+  |  Attention = "Who should I ask, and how much?"|
+  |                                                |
+  |  Q (Query)  = "I'm curious about this"         |
+  |  K (Key)    = "I know about this"               |
+  |  V (Value)  = "Here's my information"            |
+  |  Score      = Q . K (how relevant?)              |
+  |  Weight     = softmax(Score) (convert to prob)   |
+  |  Output     = Weight x V (weighted average)      |
+  +----------------------------------------------+
 """)
 
 
 # ================================================================
-구분선("STEP 6: Attention의 문제점")
+separator("STEP 6: The Problem with Attention")
 # ================================================================
 
 print("""
-  Attention은 잘 작동하지만 치명적인 단점이 있습니다:
+  Attention works well, but it has a critical drawback:
 
-  시퀀스 길이가 L이면, "모든 쌍"의 점수를 계산해야 합니다.
+  If the sequence length is L, we must compute scores for "all pairs".
 
-    L=4  (hello):  4 x 4 = 16번 계산    → OK
-    L=100:         100 x 100 = 10,000번  → 괜찮음
-    L=1000:        1,000,000번           → 느려짐
-    L=100,000:     10,000,000,000번      → 현실적으로 불가능
+    L=4  (hello):  4 x 4 = 16 computations    -> OK
+    L=100:         100 x 100 = 10,000          -> manageable
+    L=1000:        1,000,000                   -> getting slow
+    L=100,000:     10,000,000,000              -> practically impossible
 
-  이것이 "O(L^2) 복잡도" 문제입니다.
-  시퀀스가 2배 길어지면 계산량은 4배!
+  This is the "O(L^2) complexity" problem.
+  When the sequence is 2x longer, computation is 4x!
 
-  시각화 (L=8일 때의 Attention 행렬):
+  Visualization (Attention matrix for L=8):
 
-    현재↓  이전→   t0  t1  t2  t3  t4  t5  t6  t7
-    t0           [.8  .   .   .   .   .   .   .]
-    t1           [.3  .7  .   .   .   .   .   .]
-    t2           [.1  .2  .7  .   .   .   .   .]
-    t3           [.1  .1  .3  .5  .   .   .   .]
-    t4           [.0  .1  .1  .3  .5  .   .   .]
-    t5           [.0  .0  .1  .2  .3  .4  .   .]
-    t6           [.0  .0  .0  .1  .2  .3  .4  .]
-    t7           [.0  .0  .0  .1  .1  .2  .3  .3]
+    current v  prev ->   t0  t1  t2  t3  t4  t5  t6  t7
+    t0                  [.8  .   .   .   .   .   .   .]
+    t1                  [.3  .7  .   .   .   .   .   .]
+    t2                  [.1  .2  .7  .   .   .   .   .]
+    t3                  [.1  .1  .3  .5  .   .   .   .]
+    t4                  [.0  .1  .1  .3  .5  .   .   .]
+    t5                  [.0  .0  .1  .2  .3  .4  .   .]
+    t6                  [.0  .0  .0  .1  .2  .3  .4  .]
+    t7                  [.0  .0  .0  .1  .1  .2  .3  .3]
 
-    → 이 행렬 전체 (L x L개의 칸)를 계산해야 합니다!
+    -> We must compute this entire matrix (L x L entries)!
 """)
 
 
 # ================================================================
-구분선("STEP 7: 방법 3 — Grassmann (이 논문의 핵심)")
+separator("STEP 7: Approach 3 -- Grassmann (The Core of This Paper)")
 # ================================================================
 
 print("""
-  Grassmann의 아이디어:
-  "모든 이전 글자를 볼 필요 없다!
-   가까운 몇 개만 보되, 더 풍부한 정보를 추출하자."
+  The Grassmann idea:
+  "We don't need to look at all previous characters!
+   Look at only a few nearby ones, but extract richer information."
 
-  구체적으로:
-  1) Attention: 모든 이전 토큰과의 "유사도 점수" (스칼라 1개씩)
-  2) Grassmann: 가까운 토큰들과의 "기하학적 관계" (벡터 여러 개)
+  Specifically:
+  1) Attention: "similarity scores" with all previous tokens (1 scalar each)
+  2) Grassmann: "geometric relationships" with nearby tokens (multiple vectors)
 
-  비유하자면:
-    Attention  = 모든 친구에게 "우리 얼마나 친해?" 1~10점 물어보기
-    Grassmann  = 가장 친한 3명과 깊은 대화해서 풍부한 정보 얻기
+  An analogy:
+    Attention  = asking all friends "how close are we?" on a 1-10 scale
+    Grassmann  = having deep conversations with your 3 closest friends for rich info
 """)
 
-print("  Grassmann의 3단계:\n")
-print("  ┌──────────────────────────────────────────────────────┐")
-print("  │  Step A: 차원 축소                                    │")
-print("  │    글자 벡터를 작은 벡터로 압축                         │")
-print("  │    [0.3, -0.1, 0.7, 0.2] → [0.5, -0.3]              │")
-print("  │                                                       │")
-print("  │  Step B: Plucker 좌표 (기하학적 관계 추출)              │")
-print("  │    현재 글자와 이전 글자의 '관계'를 벡터로 표현          │")
-print("  │    내적(스칼라 1개)보다 훨씬 풍부한 정보!               │")
-print("  │                                                       │")
-print("  │  Step C: 게이트 혼합                                   │")
-print("  │    원래 정보와 기하학 정보를 학습된 비율로 섞기          │")
-print("  └──────────────────────────────────────────────────────┘")
+print("  Grassmann's 3 steps:\n")
+print("  +------------------------------------------------------+")
+print("  |  Step A: Dimensionality reduction                     |")
+print("  |    Compress character vectors to smaller vectors       |")
+print("  |    [0.3, -0.1, 0.7, 0.2] -> [0.5, -0.3]             |")
+print("  |                                                       |")
+print("  |  Step B: Plucker coordinates (geometric relationship) |")
+print("  |    Express the 'relationship' between current and     |")
+print("  |    previous characters as a vector                    |")
+print("  |    Much richer info than a dot product (1 scalar)!    |")
+print("  |                                                       |")
+print("  |  Step C: Gated mixing                                 |")
+print("  |    Blend original info and geometric info at a        |")
+print("  |    learned ratio                                      |")
+print("  +------------------------------------------------------+")
 
 
 # ================================================================
-구분선("STEP 8: Grassmann Step A — 차원 축소")
+separator("STEP 8: Grassmann Step A -- Dimensionality Reduction")
 # ================================================================
 
 print("""
-  왜 줄이나?
-  다음 단계(Plucker)에서 모든 i<j 쌍을 계산하는데,
-  차원이 크면 쌍의 수가 폭발합니다:
-    4차원 → C(4,2) = 6쌍
-    16차원 → C(16,2) = 120쌍
-    64차원 → C(64,2) = 2016쌍!
-  그래서 먼저 작은 차원으로 줄입니다.
+  Why reduce?
+  In the next step (Plucker), we compute all i<j pairs,
+  and the number of pairs explodes with dimension:
+    4 dims  -> C(4,2) = 6 pairs
+    16 dims -> C(16,2) = 120 pairs
+    64 dims -> C(64,2) = 2016 pairs!
+  So we first reduce to a smaller dimension.
 """)
 
-# 4차원 → 2차원 축소 예시
+# 4-dim -> 2-dim reduction example
 W_red = [[0.5, -0.3, 0.2, 0.1],
          [0.1,  0.4, -0.2, 0.3]]
 
 def mat_vec(W, x):
     return [sum(wi*xi for wi, xi in zip(row, x)) for row in W]
 
-print("  예시: 4차원 → 2차원 축소\n")
+print("  Example: 4-dim -> 2-dim reduction\n")
 for ch in ['h', 'e', 'l']:
     vec = embeds[ch]
     z = mat_vec(W_red, vec)
     detail = ", ".join(f"{v:.2f}" for v in z)
-    print(f"    '{ch}' {vec} → z=[{detail}]")
+    print(f"    '{ch}' {vec} -> z=[{detail}]")
 
 
 # ================================================================
-구분선("STEP 9: Grassmann Step B — Plucker 좌표 (핵심!)")
+separator("STEP 9: Grassmann Step B -- Plucker Coordinates (The Key!)")
 # ================================================================
 
 print("""
-  Attention은 두 벡터의 관계를 "내적"으로 표현합니다.
-  내적 = 숫자 1개 (스칼라)
+  Attention represents the relationship between two vectors via the "dot product".
+  Dot product = a single number (scalar)
 
-  Grassmann은 두 벡터의 관계를 "Plucker 좌표"로 표현합니다.
-  Plucker = 숫자 여러 개 (벡터)
+  Grassmann represents the relationship between two vectors via "Plucker coordinates".
+  Plucker = multiple numbers (vector)
 
-  Plucker 좌표가 뭔가?
-  두 벡터가 이루는 "평면"을 수학적으로 표현한 것입니다.
+  What are Plucker coordinates?
+  They are a mathematical representation of the "plane" spanned by two vectors.
 """)
 
-# 2차원 예시 (이해하기 쉽게)
-print("  ─── 2차원 예시 (가장 간단한 경우) ───\n")
+# 2D example (easy to understand)
+print("  --- 2D example (simplest case) ---\n")
 
-u = [3.0, 1.0]   # 현재 글자의 축소 벡터
-v = [1.0, 2.0]   # 이전 글자의 축소 벡터
+u = [3.0, 1.0]   # reduced vector of current character
+v = [1.0, 2.0]   # reduced vector of previous character
 
-print(f"    현재 글자의 z: u = {u}")
-print(f"    이전 글자의 z: v = {v}")
+print(f"    Current character's z: u = {u}")
+print(f"    Previous character's z: v = {v}")
 
-# 내적 (Attention 방식)
+# Dot product (Attention approach)
 dot = u[0]*v[0] + u[1]*v[1]
-print(f"\n    [Attention 방식] 내적:")
+print(f"\n    [Attention approach] Dot product:")
 print(f"      u . v = {u[0]}*{v[0]} + {u[1]}*{v[1]} = {dot}")
-print(f"      → 숫자 1개: {dot}")
-print(f"      → 의미: '이 두 벡터가 얼마나 같은 방향인가?'")
+print(f"      -> Single number: {dot}")
+print(f"      -> Meaning: 'How much do these two vectors point in the same direction?'")
 
-# Plucker (Grassmann 방식)
+# Plucker (Grassmann approach)
 p01 = u[0]*v[1] - u[1]*v[0]
-print(f"\n    [Grassmann 방식] Plucker 좌표:")
+print(f"\n    [Grassmann approach] Plucker coordinates:")
 print(f"      p = u[0]*v[1] - u[1]*v[0]")
 print(f"        = {u[0]}*{v[1]} - {u[1]}*{v[0]}")
 print(f"        = {p01}")
-print(f"      → 숫자 1개: {p01} (2차원에서는 쌍이 1개뿐)")
-print(f"      → 의미: '이 두 벡터가 이루는 평행사변형의 넓이'")
-print(f"              양수면 반시계 방향, 음수면 시계 방향")
+print(f"      -> Single number: {p01} (in 2D there's only 1 pair)")
+print(f"      -> Meaning: 'Area of the parallelogram formed by these two vectors'")
+print(f"              Positive = counterclockwise, Negative = clockwise")
 
-# 3차원 예시 (Plucker의 장점이 드러남)
-print("\n\n  ─── 3차원 예시 (Plucker의 장점이 드러남) ───\n")
+# 3D example (Plucker's advantage becomes clear)
+print("\n\n  --- 3D example (where Plucker's advantage shows) ---\n")
 
 u3 = [3.0, 1.0, 2.0]
 v3 = [1.0, 2.0, -1.0]
@@ -352,214 +354,216 @@ print(f"    u = {u3}")
 print(f"    v = {v3}")
 
 dot3 = sum(a*b for a, b in zip(u3, v3))
-print(f"\n    [Attention] 내적 = {dot3}  (숫자 1개)")
+print(f"\n    [Attention] Dot product = {dot3}  (single number)")
 
 p01 = u3[0]*v3[1] - u3[1]*v3[0]
 p02 = u3[0]*v3[2] - u3[2]*v3[0]
 p12 = u3[1]*v3[2] - u3[2]*v3[1]
-print(f"\n    [Grassmann] Plucker 좌표:")
+print(f"\n    [Grassmann] Plucker coordinates:")
 print(f"      p_01 = u[0]*v[1] - u[1]*v[0] = {u3[0]}*{v3[1]} - {u3[1]}*{v3[0]} = {p01}")
 print(f"      p_02 = u[0]*v[2] - u[2]*v[0] = {u3[0]}*{v3[2]} - {u3[2]}*{v3[0]} = {p02}")
 print(f"      p_12 = u[1]*v[2] - u[2]*v[1] = {u3[1]}*{v3[2]} - {u3[2]}*{v3[1]} = {p12}")
-print(f"      → 벡터 [{p01}, {p02}, {p12}]  (숫자 3개!)")
+print(f"      -> Vector [{p01}, {p02}, {p12}]  (3 numbers!)")
 
 print(f"""
-    비교:
-      내적   →  {dot3}            숫자 1개 (방향 유사도만)
-      Plucker → [{p01}, {p02}, {p12}]  숫자 3개 (관계의 풍부한 표현)
+    Comparison:
+      Dot product ->  {dot3}            1 number (directional similarity only)
+      Plucker     -> [{p01}, {p02}, {p12}]  3 numbers (rich representation of the relationship)
 
-    내적은 "얼마나 비슷한가?"만 알려줍니다.
-    Plucker는 "어떤 평면을 이루는가?"의 완전한 정보입니다.
-    → 같은 내적값이라도 Plucker는 다를 수 있어요!
+    The dot product only tells "how similar are they?"
+    Plucker gives complete information about "what plane do they span?"
+    -> Two pairs can have the same dot product but different Plucker coordinates!
 """)
 
 
 # ================================================================
-구분선("STEP 10: 같은 내적, 다른 Plucker — 왜 Plucker가 더 풍부한가")
+separator("STEP 10: Same Dot Product, Different Plucker -- Why Plucker Is Richer")
 # ================================================================
 
 print("""
-  두 쌍의 벡터가 내적은 같지만 Plucker는 다른 예시:
+  An example where two pairs of vectors have the same dot product but different Plucker:
 """)
 
 pair_a = ([1.0, 2.0, 0.0], [2.0, 1.0, 0.0])
 pair_b = ([1.0, 0.0, 2.0], [2.0, 0.0, 1.0])
 
-for name, (a, b) in [("쌍 A", pair_a), ("쌍 B", pair_b)]:
+for name, (a, b) in [("Pair A", pair_a), ("Pair B", pair_b)]:
     dot = sum(x*y for x, y in zip(a, b))
     p01 = a[0]*b[1] - a[1]*b[0]
     p02 = a[0]*b[2] - a[2]*b[0]
     p12 = a[1]*b[2] - a[2]*b[1]
     print(f"  {name}: u={a}, v={b}")
-    print(f"    내적 = {dot}")
+    print(f"    Dot product = {dot}")
     print(f"    Plucker = [{p01}, {p02}, {p12}]")
     print()
 
-print("""  내적은 둘 다 4.0으로 동일!
-  하지만 Plucker는 완전히 다릅니다.
+print("""  The dot product is the same for both: 4.0!
+  But the Plucker coordinates are completely different.
 
-  쌍 A: xy 평면에서의 관계 → [-3, 0, 0]
-  쌍 B: xz 평면에서의 관계 → [0, -3, 0]
+  Pair A: relationship in the xy plane -> [-3, 0, 0]
+  Pair B: relationship in the xz plane -> [0, -3, 0]
 
-  → Attention은 이 두 상황을 구분 못하지만,
-    Grassmann은 구분할 수 있습니다!
+  -> Attention cannot distinguish these two situations,
+    but Grassmann can!
 """)
 
 
 # ================================================================
-구분선("STEP 11: 윈도우 — 왜 모든 토큰을 안 보나?")
+separator("STEP 11: Window -- Why Not Look at All Tokens?")
 # ================================================================
 
 print("""
-  Attention:  현재 토큰이 "모든" 이전 토큰을 봄
-  Grassmann:  현재 토큰이 "가까운 몇 개"만 봄 (윈도우)
+  Attention:  the current token looks at "all" previous tokens
+  Grassmann:  the current token looks at only "a few nearby" ones (window)
 
-  우리 설정: window = [1, 2, 4]
+  Our setting: window = [1, 2, 4]
 
-  위치 7의 토큰이 참조하는 대상:
-    delta=1 → 위치 6 (바로 앞)
-    delta=2 → 위치 5 (두 칸 앞)
-    delta=4 → 위치 3 (네 칸 앞)
+  Token at position 7 references:
+    delta=1 -> position 6 (immediately before)
+    delta=2 -> position 5 (two steps back)
+    delta=4 -> position 3 (four steps back)
 
     0   1   2   3   4   5   6   [7]
-                *       *   *   현재
+                *       *   *   current
                 |       |   |
               delta=4  d=2 d=1
 
-  왜 이래도 괜찮은가?
-    1) 언어에서 가장 중요한 정보는 보통 가까이 있음
-    2) 레이어를 쌓으면 간접적으로 먼 정보도 전달됨
-       (레이어 1에서 delta=4로 4칸 전 정보 → 레이어 2에서 또 4칸 전 → 8칸 전 도달)
-    3) Plucker가 내적보다 풍부하므로 적은 참조로도 충분
+  Why is this still okay?
+    1) In language, the most important information is usually nearby
+    2) Stacking layers allows distant information to propagate indirectly
+       (Layer 1 reaches 4 positions back via delta=4 -> Layer 2 another 4 back -> 8 positions total)
+    3) Because Plucker is richer than dot product, fewer references suffice
 
-  복잡도 비교:
-    Attention:  모든 쌍 → O(L^2)  → L이 커지면 폭발
-    Grassmann:  고정 3개 → O(3*L)  → L에 비례 (선형!)
+  Complexity comparison:
+    Attention:  all pairs    -> O(L^2)  -> explodes as L grows
+    Grassmann:  fixed 3 refs -> O(3*L)  -> proportional to L (linear!)
 """)
 
 
 # ================================================================
-구분선("STEP 12: 게이트 — 원본과 기하학 정보를 섞기")
+separator("STEP 12: Gate -- Mixing Original and Geometric Information")
 # ================================================================
 
 print("""
-  Grassmann으로 "이전 토큰과의 기하학적 관계(g)"를 얻었습니다.
-  현재 토큰의 "원래 벡터(x)"도 있습니다.
+  With Grassmann, we obtained the "geometric relationship with previous tokens (g)".
+  We also have the current token's "original vector (x)".
 
-  이 둘을 어떻게 합칠까?
+  How do we combine them?
 
-  가장 단순: x + g (그냥 더하기)
-  → 문제: 어떤 차원은 원본이 중요하고, 어떤 차원은 기하학이 중요할 수 있음
+  Simplest: x + g (just add)
+  -> Problem: for some dimensions the original is important,
+     for others the geometric info is important
 
-  해결: "게이트(gate)" — 차원별로 섞는 비율을 학습!
+  Solution: "gate" -- learn a mixing ratio per dimension!
 """)
 
-# 간단한 게이트 예시
+# Simple gate example
 x_example = [0.5, -0.3, 0.8, 0.1]
 g_example = [0.1,  0.7, -0.2, 0.6]
-alpha_example = [0.9, 0.2, 0.7, 0.4]  # sigmoid 출력 (0~1)
+alpha_example = [0.9, 0.2, 0.7, 0.4]  # sigmoid output (0~1)
 
-print("  예시:")
-print(f"    원본 벡터 x:      {x_example}")
-print(f"    기하학 벡터 g:    {g_example}")
-print(f"    게이트 alpha:     {alpha_example}")
-print(f"    (alpha는 sigmoid 출력, 0~1 사이)")
+print("  Example:")
+print(f"    Original vector x:     {x_example}")
+print(f"    Geometric vector g:    {g_example}")
+print(f"    Gate alpha:            {alpha_example}")
+print(f"    (alpha is a sigmoid output, between 0 and 1)")
 print()
-print("    혼합 공식: output = alpha * x + (1-alpha) * g\n")
+print("    Mixing formula: output = alpha * x + (1-alpha) * g\n")
 
 output = []
 for j in range(4):
     a = alpha_example[j]
     val = a * x_example[j] + (1-a) * g_example[j]
     output.append(round(val, 3))
-    print(f"    차원 {j}: {a:.1f}*{x_example[j]:+.1f} + {1-a:.1f}*{g_example[j]:+.1f} = {val:+.3f}"
-          f"  {'← 원본 유지' if a > 0.5 else '← 기하학 채택'}")
+    print(f"    dim {j}: {a:.1f}*{x_example[j]:+.1f} + {1-a:.1f}*{g_example[j]:+.1f} = {val:+.3f}"
+          f"  {'<- keep original' if a > 0.5 else '<- adopt geometric'}")
 
-print(f"\n    최종 출력: {output}")
+print(f"\n    Final output: {output}")
 
 print("""
-  alpha = 0.9 → 원본 90% + 기하학 10% (원본 정보가 이미 충분한 차원)
-  alpha = 0.2 → 원본 20% + 기하학 80% (이전 토큰 관계가 중요한 차원)
+  alpha = 0.9 -> 90% original + 10% geometric (dimension where original info is sufficient)
+  alpha = 0.2 -> 20% original + 80% geometric (dimension where previous token relationships matter)
 
-  이 alpha 값은 학습 과정에서 자동으로 결정됩니다!
+  These alpha values are determined automatically during training!
 """)
 
 
 # ================================================================
-구분선("STEP 13: 전체 흐름 정리")
+separator("STEP 13: Full Pipeline Summary")
 # ================================================================
 
 print("""
-  ┌─────────────────────────────────────────────────────────────┐
-  │                                                             │
-  │  입력: "h e l l o"  →  위치 4의 'o' 다음 글자를 예측        │
-  │                                                             │
-  │  ┌─────────────────────────────────────────────────┐        │
-  │  │  1. 임베딩: 'o' → 숫자 벡터 x                    │        │
-  │  └──────────────────────┬──────────────────────────┘        │
-  │                         ↓                                   │
-  │  ┌─────────────────────────────────────────────────┐        │
-  │  │  2. 차원 축소: x(16차원) → z(4차원)              │        │
-  │  └──────────────────────┬──────────────────────────┘        │
-  │                         ↓                                   │
-  │  ┌─────────────────────────────────────────────────┐        │
-  │  │  3. Plucker 좌표 계산:                           │        │
-  │  │     z_현재 와 z_(1칸전) → 관계 벡터 1             │        │
-  │  │     z_현재 와 z_(2칸전) → 관계 벡터 2             │        │
-  │  │     z_현재 와 z_(4칸전) → 관계 벡터 3             │        │
-  │  │     → 평균 = 기하학 벡터 g                       │        │
-  │  └──────────────────────┬──────────────────────────┘        │
-  │                         ↓                                   │
-  │  ┌─────────────────────────────────────────────────┐        │
-  │  │  4. 게이트 혼합:                                 │        │
-  │  │     alpha = sigmoid(...)                         │        │
-  │  │     output = alpha*x + (1-alpha)*g               │        │
-  │  └──────────────────────┬──────────────────────────┘        │
-  │                         ↓                                   │
-  │  ┌─────────────────────────────────────────────────┐        │
-  │  │  5. FFN: 벡터를 한 번 더 변환 (d→4d→d)          │        │
-  │  └──────────────────────┬──────────────────────────┘        │
-  │                         ↓                                   │
-  │  ┌─────────────────────────────────────────────────┐        │
-  │  │  6. 출력: 벡터 → "다음 글자가 a일 확률 3%,       │        │
-  │  │          b일 확률 1%, ... z일 확률 2%"            │        │
-  │  └─────────────────────────────────────────────────┘        │
-  │                                                             │
-  └─────────────────────────────────────────────────────────────┘
+  +-------------------------------------------------------------+
+  |                                                             |
+  |  Input: "h e l l o"  ->  Predict next char at position 4 'o'|
+  |                                                             |
+  |  +---------------------------------------------+           |
+  |  |  1. Embedding: 'o' -> numeric vector x       |           |
+  |  +----------------------+-----------------------+           |
+  |                         v                                   |
+  |  +---------------------------------------------+           |
+  |  |  2. Dim reduction: x(16-dim) -> z(4-dim)     |           |
+  |  +----------------------+-----------------------+           |
+  |                         v                                   |
+  |  +---------------------------------------------+           |
+  |  |  3. Plucker coordinate computation:           |           |
+  |  |     z_current and z_(1 step back) -> rel vec 1|           |
+  |  |     z_current and z_(2 steps back) -> rel vec 2|          |
+  |  |     z_current and z_(4 steps back) -> rel vec 3|          |
+  |  |     -> average = geometric vector g            |           |
+  |  +----------------------+-----------------------+           |
+  |                         v                                   |
+  |  +---------------------------------------------+           |
+  |  |  4. Gated mixing:                             |           |
+  |  |     alpha = sigmoid(...)                      |           |
+  |  |     output = alpha*x + (1-alpha)*g            |           |
+  |  +----------------------+-----------------------+           |
+  |                         v                                   |
+  |  +---------------------------------------------+           |
+  |  |  5. FFN: transform the vector once more (d->4d->d)|      |
+  |  +----------------------+-----------------------+           |
+  |                         v                                   |
+  |  +---------------------------------------------+           |
+  |  |  6. Output: vector -> "probability of next char being   ||
+  |  |          a: 3%, b: 1%, ... z: 2%"             |           |
+  |  +---------------------------------------------+           |
+  |                                                             |
+  +-------------------------------------------------------------+
 """)
 
 
 # ================================================================
-구분선("STEP 14: Attention vs Grassmann 최종 비교")
+separator("STEP 14: Attention vs Grassmann -- Final Comparison")
 # ================================================================
 
 print("""
-  ┌────────────────┬─────────────────────┬──────────────────────┐
-  │                │     Attention       │     Grassmann        │
-  ├────────────────┼─────────────────────┼──────────────────────┤
-  │ 참조 범위      │ 모든 이전 토큰       │ 가까운 N개만          │
-  │                │ (전체 문맥)          │ (로컬 윈도우)         │
-  ├────────────────┼─────────────────────┼──────────────────────┤
-  │ 관계 표현      │ 내적 → 스칼라 1개    │ Plucker → 벡터       │
-  │                │ "얼마나 비슷한가"     │ "어떤 관계인가"       │
-  ├────────────────┼─────────────────────┼──────────────────────┤
-  │ 혼합 방법      │ softmax 가중 평균    │ 게이트 혼합           │
-  │                │                     │ (차원별 비율 조절)     │
-  ├────────────────┼─────────────────────┼──────────────────────┤
-  │ 계산량         │ O(L^2)              │ O(L)                 │
-  │                │ 길이 2배 → 4배 느림  │ 길이 2배 → 2배 느림   │
-  ├────────────────┼─────────────────────┼──────────────────────┤
-  │ 성능           │ 기준                 │ 비슷 (10-15% 이내)   │
-  ├────────────────┼─────────────────────┼──────────────────────┤
-  │ 필요한 행렬    │ W_q, W_k, W_v, W_o  │ W_red, W_plu, W_gate │
-  │                │ (4개)               │ (3개)                │
-  └────────────────┴─────────────────────┴──────────────────────┘
+  +----------------+---------------------+----------------------+
+  |                |     Attention       |     Grassmann        |
+  +----------------+---------------------+----------------------+
+  | Reference      | All previous tokens | Only nearby N tokens |
+  | range          | (full context)      | (local window)       |
+  +----------------+---------------------+----------------------+
+  | Relationship   | Dot prod -> 1 scalar| Plucker -> vector    |
+  | representation | "How similar?"      | "What relationship?" |
+  +----------------+---------------------+----------------------+
+  | Mixing method  | Softmax weighted avg| Gated mixing         |
+  |                |                     | (per-dim ratio ctrl) |
+  +----------------+---------------------+----------------------+
+  | Complexity     | O(L^2)              | O(L)                 |
+  |                | 2x length -> 4x slow| 2x length -> 2x slow|
+  +----------------+---------------------+----------------------+
+  | Performance    | Baseline            | Comparable (within   |
+  |                |                     | 10-15%)              |
+  +----------------+---------------------+----------------------+
+  | Required       | W_q, W_k, W_v, W_o | W_red, W_plu, W_gate |
+  | matrices       | (4 matrices)        | (3 matrices)         |
+  +----------------+---------------------+----------------------+
 
-  한마디 요약:
-    Attention = 모든 친구에게 간단히 물어보기 (넓고 얕게)
-    Grassmann = 가까운 친구와 깊은 대화하기   (좁고 깊게)
+  One-line summary:
+    Attention = asking all friends briefly           (broad and shallow)
+    Grassmann = deep conversation with close friends (narrow and deep)
 """)
 
-print("  이제 micro_grassmann.py 코드를 다시 읽어보세요!")
-print("  각 단계가 위의 설명 중 어디에 해당하는지 보일 겁니다.")
+print("  Now go re-read micro_grassmann.py!")
+print("  You'll see which part of the explanation each step corresponds to.")
 print()

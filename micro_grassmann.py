@@ -1,35 +1,36 @@
 """
 micro_grassmann.py
 ================================================================================
-"Attention Is Not What You Need" 논문의 순수 Python 구현
+Pure Python implementation of the "Attention Is Not What You Need" paper
 (arXiv:2512.19428 — Grassmann Flows as an Attention-Free Alternative)
 
-Andrej Karpathy의 microGPT 스타일을 따라, 외부 의존성 없이
-순수 Python만으로 Grassmann Flow 기반 언어 모델을 구현합니다.
+Following the style of Andrej Karpathy's microGPT, this implements a
+Grassmann Flow-based language model using only pure Python, with no
+external dependencies.
 
-[핵심 아이디어]
-  기존 Transformer:  Q·K^T → softmax → 가중합(V)  → O(L^2) 복잡도
-  이 논문:           Plucker 좌표 → 기하학적 인코딩   → O(L) 복잡도
+[Core Idea]
+  Traditional Transformer:  Q·K^T -> softmax -> weighted sum(V) -> O(L^2) complexity
+  This paper:               Plucker coordinates -> geometric encoding  -> O(L) complexity
 
-  "정보는 명시적인 쌍별 가중치가 아니라,
-   저랭크 부분공간의 제어된 변형을 통해 시퀀스를 흐른다."
-   — 논문 본문 중
+  "Information flows through sequences not via explicit pairwise weights,
+   but through controlled deformations of low-rank subspaces."
+   — From the paper
 
-[구조 비교]
-  microGPT (Karpathy)          micro_grassmann (이 파일)
+[Architecture Comparison]
+  microGPT (Karpathy)          micro_grassmann (this file)
   ─────────────────────        ─────────────────────────
-  Value autograd 엔진          (동일 — 재사용)
-  토큰/위치 임베딩              (동일)
+  Value autograd engine        (same — reused)
+  Token/position embeddings    (same)
   Multi-Head Attention  ──→    Causal Grassmann Layer ★
-    Q = W_q · x                  z = W_red · x (차원 축소)
+    Q = W_q · x                  z = W_red · x (dimension reduction)
     K = W_k · x                  Plucker(z_t, z_{t-delta})
     V = W_v · x                  g = W_plu · plucker
     softmax(QK^T/sqrt(d))·V      alpha = sigmoid(gate)
     W_o · attn_out                mix = alpha*x + (1-alpha)*g
-  Feed-Forward Network          (동일)
-  Adam Optimizer                (동일)
+  Feed-Forward Network         (same)
+  Adam Optimizer               (same)
 
-의존성: 없음 (순수 Python + math + random)
+Dependencies: None (pure Python + math + random)
 ================================================================================
 """
 
@@ -41,30 +42,31 @@ random.seed(42)
 
 
 # ============================================================================
-#  PART 1: Autograd 엔진 (자동 미분)
+#  PART 1: Autograd Engine (Automatic Differentiation)
 # ============================================================================
 #
-#  신경망 학습 = "파라미터를 조금씩 조정해서 loss를 줄이는 것"
-#  이를 위해 "loss가 각 파라미터에 얼마나 민감한가?" (=gradient)를 알아야 합니다.
+#  Neural network training = "adjusting parameters incrementally to reduce loss"
+#  To do this, we need to know "how sensitive is the loss to each parameter?"
+#  (= gradient).
 #
-#  Autograd는 모든 수학 연산을 기록해두었다가, backward()를 호출하면
-#  Chain Rule(연쇄법칙)을 써서 모든 파라미터의 gradient를 자동 계산합니다.
+#  Autograd records all math operations, and when backward() is called,
+#  it uses the Chain Rule to automatically compute gradients for all parameters.
 #
-#  [Chain Rule 예시]
-#    loss = f(g(x)) 일 때,
+#  [Chain Rule Example]
+#    When loss = f(g(x)),
 #    d(loss)/dx = d(loss)/d(g) * d(g)/dx
-#    즉, "상위 gradient" x "국소 gradient"를 곱해 전파합니다.
+#    i.e., propagate by multiplying "upstream gradient" x "local gradient".
 #
-#  Value 객체 하나 = 스칼라 값 하나를 감싸는 래퍼:
-#    .data         → 실제 값 (forward pass에서 계산)
-#    .grad         → 이 값에 대한 loss의 gradient (backward pass에서 계산)
-#    ._children    → 이 값을 만들어낸 입력 Value들
-#    ._local_grads → 각 입력에 대한 국소 gradient (chain rule용)
+#  A single Value object = a wrapper around a single scalar value:
+#    .data         -> actual value (computed during forward pass)
+#    .grad         -> gradient of loss w.r.t. this value (computed during backward pass)
+#    ._children    -> input Values that produced this value
+#    ._local_grads -> local gradient for each input (for chain rule)
 #
-#  [예시] c = a * b 이면:
+#  [Example] If c = a * b:
 #    c.data = a.data * b.data
 #    c._children = (a, b)
-#    c._local_grads = (b.data, a.data)   ← d(a*b)/da = b, d(a*b)/db = a
+#    c._local_grads = (b.data, a.data)   <- d(a*b)/da = b, d(a*b)/db = a
 # ============================================================================
 
 class Value:
@@ -83,11 +85,11 @@ class Value:
 
     def __mul__(self, other):
         other = other if isinstance(other, Value) else Value(other)
-        # d(a*b)/da = b, d(a*b)/db = a  (곱의 미분)
+        # d(a*b)/da = b, d(a*b)/db = a  (derivative of product)
         return Value(self.data * other.data, (self, other), (other.data, self.data))
 
     def __pow__(self, other):
-        # d(a^n)/da = n * a^(n-1)  (거듭제곱의 미분)
+        # d(a^n)/da = n * a^(n-1)  (power rule)
         return Value(self.data ** other, (self,), (other * self.data ** (other - 1),))
 
     def log(self):
@@ -100,7 +102,7 @@ class Value:
 
     def relu(self):
         # ReLU(x) = max(0, x)
-        # 기울기: x > 0 이면 1, x <= 0 이면 0
+        # Gradient: 1 if x > 0, 0 if x <= 0
         return Value(max(0, self.data), (self,), (float(self.data > 0),))
 
     def __neg__(self):        return self * -1
@@ -113,12 +115,13 @@ class Value:
 
     def backward(self):
         """
-        역전파(Backpropagation):
-        계산 그래프를 역순으로 순회하며 모든 Value의 gradient를 계산합니다.
+        Backpropagation:
+        Traverses the computation graph in reverse order to compute
+        gradients for all Values.
 
-        1. 위상 정렬(topological sort)로 노드 순서를 정함
-        2. loss 노드부터 시작 (grad = 1, 왜냐면 d(loss)/d(loss) = 1)
-        3. 역순으로 각 노드를 방문하며 chain rule 적용
+        1. Determine node order via topological sort
+        2. Start from the loss node (grad = 1, because d(loss)/d(loss) = 1)
+        3. Visit each node in reverse order, applying the chain rule
         """
         topo = []
         visited = set()
@@ -130,25 +133,25 @@ class Value:
                 topo.append(v)
         build_topo(self)
 
-        self.grad = 1  # 시작점: d(loss)/d(loss) = 1
+        self.grad = 1  # Starting point: d(loss)/d(loss) = 1
         for v in reversed(topo):
             for child, lg in zip(v._children, v._local_grads):
-                child.grad += lg * v.grad  # Chain Rule: 국소gradient * 상위gradient
+                child.grad += lg * v.grad  # Chain Rule: local_grad * upstream_grad
 
 
 # ============================================================================
-#  PART 2: 데이터 로딩 & 토크나이저
+#  PART 2: Data Loading & Tokenizer
 # ============================================================================
 #
-#  Karpathy의 microGPT와 동일한 데이터셋: 영어 이름 목록 (names.txt)
-#  각 이름이 하나의 "문서"이고, 문자(character) 단위로 토큰화합니다.
+#  Same dataset as Karpathy's microGPT: a list of English names (names.txt)
+#  Each name is one "document", tokenized at the character level.
 #
-#  토큰화 예시:
+#  Tokenization example:
 #    "henry" -> [BOS, h, e, n, r, y, BOS]
 #
-#  BOS(Beginning/End of Sequence) 토큰:
-#    - 시퀀스의 시작과 끝을 나타냄
-#    - 모델에게 "여기서 시작/끝" 이라고 알려주는 특수 토큰
+#  BOS (Beginning/End of Sequence) token:
+#    - Marks the start and end of a sequence
+#    - A special token that tells the model "start/end here"
 # ============================================================================
 
 if not os.path.exists('input.txt'):
@@ -158,128 +161,129 @@ if not os.path.exists('input.txt'):
 
 docs = [l.strip() for l in open('input.txt').read().strip().split('\n') if l.strip()]
 random.shuffle(docs)
-print(f"문서(이름) 수: {len(docs)}")
+print(f"Number of documents (names): {len(docs)}")
 
-uchars = sorted(set(''.join(docs)))    # 전체 고유 문자 목록 (a~z 등)
-BOS = len(uchars)                       # BOS 토큰의 ID = 마지막 인덱스
-vocab_size = len(uchars) + 1            # 전체 어휘 크기 = 문자수 + BOS
-print(f"어휘 크기: {vocab_size}")
-
-
-# ============================================================================
-#  PART 3: 하이퍼파라미터 — 여기서 Attention과 갈라집니다!
-# ============================================================================
-#
-#  [microGPT의 Attention 관련 하이퍼파라미터]
-#    n_head = 4       (어텐션 헤드 수)
-#    head_dim = 4     (헤드당 차원)
-#    → Q, K, V 행렬이 필요하고, L x L 크기의 어텐션 행렬을 계산
-#
-#  [microGrassmann의 Grassmann 관련 하이퍼파라미터]
-#    r = 4            (차원 축소 목표 — 토큰 벡터를 이 크기로 압축)
-#    plucker_dim = 6  (Plucker 좌표 차원 = r*(r-1)/2 = 4*3/2 = 6)
-#    window = [1,2,4] (로컬 윈도우 오프셋)
-#    → L x L 어텐션 행렬이 전혀 없음! 로컬 윈도우만 사용
-#
-#  [윈도우 오프셋이란?]
-#    현재 토큰(위치 t)이 "몇 칸 뒤의 토큰"을 참조할지 결정합니다.
-#    window = [1, 2, 4] 이면:
-#      delta=1: 바로 이전 토큰 (t-1)과 비교  → 인접 문맥
-#      delta=2: 두 칸 전 토큰 (t-2)과 비교   → 약간 넓은 문맥
-#      delta=4: 네 칸 전 토큰 (t-4)과 비교   → 먼 문맥
-#    이렇게 다중 스케일(multi-scale)로 시퀀스 정보를 포착합니다.
-#    Attention은 모든 쌍을 보지만(O(L^2)), 여기선 정해진 오프셋만 봅니다(O(L)).
-# ============================================================================
-
-n_embd     = 16       # 임베딩 차원 (각 토큰을 나타내는 벡터의 크기)
-n_layer    = 1        # Grassmann 레이어 수 (깊이)
-block_size = 16       # 최대 시퀀스 길이
-r          = 4        # ** Grassmann 축소 차원 (d=16 → r=4로 압축)
-plucker_dim = r * (r - 1) // 2   # C(r,2) = 4*3/2 = 6  (Plucker 좌표 차원)
-window     = [1, 2, 4, 8, 12, 16] # 로컬 윈도우 오프셋 집합 (논문과 동일)
-
-print(f"임베딩 차원 d={n_embd}, 축소 차원 r={r}, "
-      f"Plucker 차원={plucker_dim}, 윈도우={window}")
+uchars = sorted(set(''.join(docs)))    # Full list of unique characters (a-z, etc.)
+BOS = len(uchars)                       # BOS token ID = last index
+vocab_size = len(uchars) + 1            # Total vocabulary size = num_chars + BOS
+print(f"Vocabulary size: {vocab_size}")
 
 
 # ============================================================================
-#  PART 4: 모델 파라미터 초기화
+#  PART 3: Hyperparameters — This Is Where We Diverge from Attention!
 # ============================================================================
 #
-#  각 파라미터 행렬의 역할을 이해하는 것이 핵심입니다.
+#  [microGPT's Attention-related hyperparameters]
+#    n_head = 4       (number of attention heads)
+#    head_dim = 4     (dimension per head)
+#    -> Requires Q, K, V matrices, computes an L x L attention matrix
+#
+#  [microGrassmann's Grassmann-related hyperparameters]
+#    r = 4            (target reduced dimension — compresses token vectors to this size)
+#    plucker_dim = 6  (Plucker coordinate dimension = r*(r-1)/2 = 4*3/2 = 6)
+#    window = [1,2,4] (local window offsets)
+#    -> No L x L attention matrix at all! Only local windows are used
+#
+#  [What are window offsets?]
+#    They determine how many steps back the current token (at position t) looks.
+#    If window = [1, 2, 4]:
+#      delta=1: Compare with the immediately previous token (t-1) -> adjacent context
+#      delta=2: Compare with the token two steps back (t-2)       -> slightly wider context
+#      delta=4: Compare with the token four steps back (t-4)      -> distant context
+#    This captures sequence information at multiple scales (multi-scale).
+#    Attention looks at all pairs (O(L^2)), but here only fixed offsets are used (O(L)).
+# ============================================================================
+
+n_embd     = 16       # Embedding dimension (size of the vector representing each token)
+n_layer    = 1        # Number of Grassmann layers (depth)
+block_size = 16       # Maximum sequence length
+r          = 4        # ** Grassmann reduced dimension (d=16 -> compressed to r=4)
+plucker_dim = r * (r - 1) // 2   # C(r,2) = 4*3/2 = 6  (Plucker coordinate dimension)
+window     = [1, 2, 4, 8, 12, 16] # Local window offset set (same as the paper)
+
+print(f"Embedding dim d={n_embd}, reduced dim r={r}, "
+      f"Plucker dim={plucker_dim}, window={window}")
+
+
+# ============================================================================
+#  PART 4: Model Parameter Initialization
+# ============================================================================
+#
+#  Understanding the role of each parameter matrix is key.
 #
 #  ┌─────────────────────────────────────────────────────────────────┐
-#  │  파라미터        크기              역할                          │
+#  │  Parameter     Size              Role                           │
 #  ├─────────────────────────────────────────────────────────────────┤
-#  │  wte         (vocab, d)     토큰 임베딩 (단어 -> 벡터)           │
-#  │  wpe         (block, d)     위치 임베딩 (위치 -> 벡터)           │
-#  │  lm_head     (vocab, d)     출력 프로젝션 (벡터 -> 단어 확률)     │
+#  │  wte         (vocab, d)     Token embedding (word -> vector)    │
+#  │  wpe         (block, d)     Position embedding (position -> vector) │
+#  │  lm_head     (vocab, d)     Output projection (vector -> word probs) │
 #  │                                                                 │
-#  │  --- 아래가 Attention의 Q,K,V,O 행렬을 완전히 대체하는 것들 ---   │
+#  │  --- Below completely replaces Attention's Q,K,V,O matrices --- │
 #  │                                                                 │
-#  │  W_red       (r, d)         차원 축소 (16차원 -> 4차원)          │
-#  │  W_plu       (d, plucker)   Plucker 좌표를 모델 차원으로 복원     │
-#  │  W_gate_h    (d, d)         게이트: 원본 경로의 가중치            │
-#  │  W_gate_g    (d, d)         게이트: 기하학 경로의 가중치          │
-#  │  mlp_fc1     (4d, d)        FFN 확장 (Transformer와 동일)       │
-#  │  mlp_fc2     (d, 4d)        FFN 축소 (Transformer와 동일)       │
+#  │  W_red       (r, d)         Dimension reduction (16-dim -> 4-dim) │
+#  │  W_plu       (d, plucker)   Restore Plucker coords to model dim │
+#  │  W_gate_h    (d, d)         Gate: weight for original pathway   │
+#  │  W_gate_g    (d, d)         Gate: weight for geometry pathway   │
+#  │  mlp_fc1     (4d, d)        FFN expansion (same as Transformer) │
+#  │  mlp_fc2     (d, 4d)        FFN contraction (same as Transformer) │
 #  └─────────────────────────────────────────────────────────────────┘
 #
-#  [파라미터 수 비교]
+#  [Parameter Count Comparison]
 #  microGPT Attention:  W_q + W_k + W_v + W_o = 4 * d * d = 4 * 16 * 16 = 1024
 #  microGrassmann:      W_red + W_plu + W_gate_h + W_gate_g
 #                       = r*d + d*C(r,2) + d*d + d*d
 #                       = 4*16 + 16*6 + 16*16 + 16*16
 #                       = 64 + 96 + 256 + 256 = 672
-#  → Grassmann이 파라미터가 더 적으면서 기하학적 구조를 활용!
+#  -> Grassmann uses fewer parameters while leveraging geometric structure!
 # ============================================================================
 
 matrix = lambda nout, nin, std=0.08: \
     [[Value(random.gauss(0, std)) for _ in range(nin)] for _ in range(nout)]
 
 state_dict = {
-    'wte':     matrix(vocab_size, n_embd),    # 토큰 임베딩 테이블
-    'wpe':     matrix(block_size, n_embd),    # 위치 임베딩 테이블
-    'lm_head': matrix(vocab_size, n_embd),    # 출력 프로젝션
+    'wte':     matrix(vocab_size, n_embd),    # Token embedding table
+    'wpe':     matrix(block_size, n_embd),    # Position embedding table
+    'lm_head': matrix(vocab_size, n_embd),    # Output projection
 }
 
 for i in range(n_layer):
-    # -- Grassmann 레이어 파라미터 (Attention을 대체!) --
-    state_dict[f'L{i}.W_red']    = matrix(r, n_embd)           # 차원 축소
+    # -- Grassmann layer parameters (replaces Attention!) --
+    state_dict[f'L{i}.W_red']    = matrix(r, n_embd)           # Dimension reduction
     state_dict[f'L{i}.W_plu']    = matrix(n_embd, plucker_dim) # Plucker -> d
-    state_dict[f'L{i}.W_gate_h'] = matrix(n_embd, n_embd)      # 게이트 (원본)
-    state_dict[f'L{i}.W_gate_g'] = matrix(n_embd, n_embd)      # 게이트 (기하학)
-    # -- Feed-Forward Network (Transformer와 동일) --
+    state_dict[f'L{i}.W_gate_h'] = matrix(n_embd, n_embd)      # Gate (original)
+    state_dict[f'L{i}.W_gate_g'] = matrix(n_embd, n_embd)      # Gate (geometry)
+    # -- Feed-Forward Network (same as Transformer) --
     state_dict[f'L{i}.mlp_fc1']  = matrix(4 * n_embd, n_embd)  # d -> 4d
     state_dict[f'L{i}.mlp_fc2']  = matrix(n_embd, 4 * n_embd)  # 4d -> d
 
 params = [p for mat in state_dict.values() for row in mat for p in row]
-print(f"총 파라미터 수: {len(params)}")
+print(f"Total number of parameters: {len(params)}")
 
 
 # ============================================================================
-#  PART 5: 유틸리티 함수들
+#  PART 5: Utility Functions
 # ============================================================================
 
 def linear(x, w):
     """
-    행렬-벡터 곱: y = W * x
-    W의 각 행(row)과 x의 내적(dot product)을 계산합니다.
+    Matrix-vector product: y = W * x
+    Computes the dot product of each row of W with x.
 
-    예: W가 3x2, x가 [x0, x1] 이면
+    Example: If W is 3x2 and x is [x0, x1], then
         y = [w00*x0 + w01*x1,
              w10*x0 + w11*x1,
-             w20*x0 + w21*x1]  → 3차원 벡터
+             w20*x0 + w21*x1]  -> 3-dimensional vector
     """
     return [sum(wi * xi for wi, xi in zip(row, x)) for row in w]
 
 
 def softmax(logits):
     """
-    소프트맥스: 실수 벡터를 확률 분포로 변환합니다.
-    모든 값이 0~1 사이가 되고, 합이 1이 됩니다.
+    Softmax: Converts a real-valued vector into a probability distribution.
+    All values become between 0 and 1, and they sum to 1.
 
-    수치 안정성을 위해 최댓값을 빼줍니다 (결과는 수학적으로 동일).
+    For numerical stability, we subtract the maximum value (the result is
+    mathematically identical).
     softmax(x_i) = exp(x_i - max) / sum(exp(x_j - max))
     """
     max_val = max(v.data for v in logits)
@@ -291,17 +295,17 @@ def softmax(logits):
 def rmsnorm(x):
     """
     RMS Normalization (Root Mean Square Normalization):
-    벡터의 크기(스케일)를 일정하게 맞춰줍니다.
+    Normalizes the magnitude (scale) of a vector to a consistent level.
 
-    공식: x_norm = x / sqrt(mean(x^2) + epsilon)
+    Formula: x_norm = x / sqrt(mean(x^2) + epsilon)
 
-    왜 필요한가?
-      학습 중 벡터 값이 너무 크거나 작아지면 gradient가 폭발/소실합니다.
-      정규화하면 학습이 안정적으로 진행됩니다.
+    Why is this needed?
+      During training, if vector values grow too large or small, gradients
+      can explode or vanish. Normalization keeps training stable.
 
-    LayerNorm과의 차이:
-      LayerNorm = 평균을 빼고 분산으로 나눔 (2번의 통계량 계산)
-      RMSNorm   = RMS로만 나눔 (1번의 통계량 계산) → 더 간단하고 빠름
+    Difference from LayerNorm:
+      LayerNorm = subtract mean, divide by std (2 statistics)
+      RMSNorm   = divide by RMS only (1 statistic) -> simpler and faster
     """
     ms = sum(xi * xi for xi in x) / len(x)
     scale = (ms + 1e-5) ** -0.5
@@ -310,265 +314,271 @@ def rmsnorm(x):
 
 def sigmoid(x):
     """
-    시그모이드 함수: 임의의 실수 -> (0, 1) 범위로 변환합니다.
+    Sigmoid function: Maps any real number to the (0, 1) range.
 
-    공식: sigma(x) = 1 / (1 + exp(-x))
+    Formula: sigma(x) = 1 / (1 + exp(-x))
 
-    그래프 모양:
-      x = -inf → 0에 가까움
-      x = 0    → 0.5
-      x = +inf → 1에 가까움
+    Graph shape:
+      x = -inf -> approaches 0
+      x = 0    -> 0.5
+      x = +inf -> approaches 1
 
-    게이트(gate)에서 "얼마나 통과시킬지" 비율을 결정하는 데 사용됩니다.
-    alpha = sigmoid(score)  →  0이면 "차단", 1이면 "완전 통과"
+    Used in gates to determine "how much to let through".
+    alpha = sigmoid(score)  ->  0 means "block", 1 means "fully pass through"
     """
     return Value(1.0) / (Value(1.0) + (-x).exp())
 
 
 # ============================================================================
-#  PART 6: Plucker 좌표 계산 — 이 논문의 수학적 핵심!
+#  PART 6: Plucker Coordinate Computation — The Mathematical Core of This Paper!
 # ============================================================================
 #
-#  [Attention은 어떻게 두 토큰의 관계를 표현하는가?]
-#    Q * K^T = 스칼라 (하나의 숫자)
-#    "이 두 토큰이 얼마나 관련 있는가?" → 유사도 점수 하나로 압축
+#  [How does Attention represent the relationship between two tokens?]
+#    Q * K^T = scalar (a single number)
+#    "How related are these two tokens?" -> compressed into a single similarity score
 #
-#  [Grassmann은 어떻게 두 토큰의 관계를 표현하는가?]
-#    Plucker(u, v) = C(r,2)차원의 벡터
-#    "이 두 토큰이 어떤 2차원 평면을 형성하는가?" → 풍부한 기하학적 표현
-#
-#  ────────────────────────────────────────────────
-#  Plucker 좌표의 직관적 설명:
-#  ────────────────────────────────────────────────
-#
-#  3차원 공간에서 두 벡터 u, v가 있으면 하나의 평면을 정의합니다.
-#  이 평면을 수학적으로 표현하는 것이 Plucker 좌표입니다.
-#
-#  r차원 공간에서 두 벡터 u, v가 만드는 2D 부분공간(평면)은
-#  Grassmann 다양체 Gr(2,r) 위의 한 점에 대응됩니다.
-#
-#  Plucker 좌표는 이 점의 좌표계입니다:
-#    p_ij = u_i * v_j  -  u_j * v_i     (모든 i < j 쌍에 대해)
-#
-#  이것은 수학적으로 "외적(wedge product)" u ^ v 의 좌표이며,
-#  두 벡터가 이루는 평행사변형의 "부호 있는 넓이"를 각 좌표 평면에
-#  사영한 것으로 볼 수 있습니다.
+#  [How does Grassmann represent the relationship between two tokens?]
+#    Plucker(u, v) = a C(r,2)-dimensional vector
+#    "What 2D plane do these two tokens form?" -> a rich geometric representation
 #
 #  ────────────────────────────────────────────────
-#  왜 내적(dot product)보다 나을 수 있는가?
+#  Intuitive explanation of Plucker coordinates:
 #  ────────────────────────────────────────────────
 #
-#  내적: u . v = |u||v|cos(theta)
-#    → 각도 정보만 남음 (1차원 스칼라)
+#  In 3D space, two vectors u, v define a plane.
+#  Plucker coordinates are the mathematical way to represent this plane.
 #
-#  외적/Plucker: u ^ v
-#    → 각도 + 방향 + 면적 정보 모두 보존 (C(r,2)차원 벡터)
-#    → 두 벡터의 관계를 훨씬 풍부하게 표현
+#  In r-dimensional space, the 2D subspace (plane) spanned by two vectors u, v
+#  corresponds to a point on the Grassmann manifold Gr(2,r).
+#
+#  Plucker coordinates are the coordinate system for this point:
+#    p_ij = u_i * v_j  -  u_j * v_i     (for all pairs i < j)
+#
+#  Mathematically, this is the coordinates of the "wedge product" u ^ v,
+#  which can be interpreted as the "signed area" of the parallelogram formed
+#  by the two vectors, projected onto each coordinate plane.
 #
 #  ────────────────────────────────────────────────
-#  구체적 계산 예시 (r=4):
+#  Why can this be better than the dot product?
+#  ────────────────────────────────────────────────
+#
+#  Dot product: u . v = |u||v|cos(theta)
+#    -> Only angle information remains (1D scalar)
+#
+#  Wedge product/Plucker: u ^ v
+#    -> Preserves angle + direction + area information (C(r,2)-dimensional vector)
+#    -> Represents the relationship between two vectors much more richly
+#
+#  ────────────────────────────────────────────────
+#  Concrete computation example (r=4):
 #  ────────────────────────────────────────────────
 #
 #  u = [u0, u1, u2, u3]
 #  v = [v0, v1, v2, v3]
 #
-#  Plucker 좌표 (i < j인 모든 쌍):
-#    p_01 = u0*v1 - u1*v0    ← (i=0, j=1) 평면에 사영된 넓이
-#    p_02 = u0*v2 - u2*v0    ← (i=0, j=2)
-#    p_03 = u0*v3 - u3*v0    ← (i=0, j=3)
-#    p_12 = u1*v2 - u2*v1    ← (i=1, j=2)
-#    p_13 = u1*v3 - u3*v1    ← (i=1, j=3)
-#    p_23 = u2*v3 - u3*v2    ← (i=2, j=3)
+#  Plucker coordinates (all pairs where i < j):
+#    p_01 = u0*v1 - u1*v0    <- area projected onto the (i=0, j=1) plane
+#    p_02 = u0*v2 - u2*v0    <- (i=0, j=2)
+#    p_03 = u0*v3 - u3*v0    <- (i=0, j=3)
+#    p_12 = u1*v2 - u2*v1    <- (i=1, j=2)
+#    p_13 = u1*v3 - u3*v1    <- (i=1, j=3)
+#    p_23 = u2*v3 - u3*v2    <- (i=2, j=3)
 #
-#  → 6개의 값으로 구성된 벡터 (C(4,2) = 6)
+#  -> A vector of 6 values (C(4,2) = 6)
 # ============================================================================
 
 def compute_plucker(u, v):
     """
-    두 r차원 벡터 u, v의 Plucker 좌표를 계산합니다.
+    Computes the Plucker coordinates of two r-dimensional vectors u and v.
 
     Args:
-        u: r차원 Value 리스트 (현재 토큰의 축소 벡터)
-        v: r차원 Value 리스트 (이전 토큰의 축소 벡터)
+        u: list of r Values (reduced vector of the current token)
+        v: list of r Values (reduced vector of a previous token)
 
     Returns:
-        C(r,2)차원 Value 리스트 (Plucker 좌표)
+        list of C(r,2) Values (Plucker coordinates)
     """
     coords = []
     for i in range(len(u)):
         for j in range(i + 1, len(u)):
             # p_ij = u_i * v_j  -  u_j * v_i
-            # 이것이 외적(wedge product)의 각 성분입니다
+            # This is each component of the wedge product
             coords.append(u[i] * v[j] - u[j] * v[i])
     return coords
 
 
 # ============================================================================
-#  PART 7: 모델 Forward Pass — Causal Grassmann Layer
+#  PART 7: Model Forward Pass — Causal Grassmann Layer
 # ============================================================================
 #
-#  한 토큰이 들어오면 다음 토큰을 예측하는 전체 과정입니다.
+#  The full process of predicting the next token given an input token.
 #
 #  ┌─────────────────────────────────────────────────┐
-#  │  입력: token_id (현재 토큰), pos_id (위치)       │
+#  │  Input: token_id (current token), pos_id (position) │
 #  │                                                  │
-#  │  1. 임베딩: 토큰 + 위치 → 벡터                    │
-#  │  2. RMS 정규화                                    │
-#  │  3. *** Causal Grassmann Layer ***                │
-#  │     a. 차원 축소:  x(16차원) → z(4차원)           │
-#  │     b. z를 캐시에 저장                             │
-#  │     c. 이전 토큰들과 Plucker 좌표 계산             │
-#  │     d. Plucker를 모델 차원으로 복원                 │
-#  │     e. 여러 오프셋의 결과를 평균                    │
-#  │     f. 게이트로 원본/기하학 정보 혼합               │
-#  │  4. 잔차 연결                                      │
-#  │  5. FFN (Feed-Forward Network)                    │
-#  │  6. 출력: 벡터 → 어휘 확률                         │
-#  │                                                    │
-#  │  출력: logits (vocab_size 차원)                    │
+#  │  1. Embedding: token + position -> vector        │
+#  │  2. RMS normalization                            │
+#  │  3. *** Causal Grassmann Layer ***               │
+#  │     a. Dimension reduction: x(16-dim) -> z(4-dim)│
+#  │     b. Store z in cache                          │
+#  │     c. Compute Plucker coords with prev tokens   │
+#  │     d. Restore Plucker to model dimension        │
+#  │     e. Average results across offsets             │
+#  │     f. Gate-mix original and geometric info       │
+#  │  4. Residual connection                          │
+#  │  5. FFN (Feed-Forward Network)                   │
+#  │  6. Output: vector -> vocabulary probabilities    │
+#  │                                                  │
+#  │  Output: logits (vocab_size dimensions)          │
 #  └─────────────────────────────────────────────────┘
 #
-#  [Causal(인과적) 제약이란?]
-#    언어 모델은 "미래를 볼 수 없어야" 합니다.
-#    "hel" 다음에 올 글자를 예측할 때, "hello"의 'l', 'o'를 미리 보면 안 됩니다.
-#    Attention은 이를 위해 마스킹(masking)을 사용합니다.
-#    Grassmann은 윈도우 오프셋이 양수(delta > 0)이므로 자연스럽게 보장됩니다.
-#    → delta=1이면 t-1만, delta=2이면 t-2만 참조 (항상 과거만 봄)
+#  [What is the Causal constraint?]
+#    Language models must "not be able to see the future".
+#    When predicting the next character after "hel", the model must not peek at
+#    'l' and 'o' from "hello".
+#    Attention uses masking to enforce this.
+#    Grassmann naturally guarantees this because window offsets are positive
+#    (delta > 0).
+#    -> delta=1 only references t-1, delta=2 only references t-2 (always looks
+#       at the past)
 # ============================================================================
 
 def forward(token_id, pos_id, z_cache):
     """
-    한 토큰에 대한 forward pass.
+    Forward pass for a single token.
 
     Args:
-        token_id: 현재 입력 토큰의 ID (정수)
-        pos_id:   현재 위치 인덱스 (0부터 시작)
-        z_cache:  이전 토큰들의 축소 벡터를 저장하는 캐시.
+        token_id: ID of the current input token (integer)
+        pos_id:   Current position index (starting from 0)
+        z_cache:  Cache storing reduced vectors of previous tokens.
                   z_cache[layer_idx] = [z_0, z_1, ..., z_{t-1}]
-                  Attention에서의 Key/Value 캐시와 비슷한 역할입니다.
+                  Plays a similar role to the Key/Value cache in Attention.
 
     Returns:
-        logits: vocab_size 차원의 Value 리스트 (다음 토큰 예측 점수)
+        logits: list of vocab_size Values (next token prediction scores)
     """
 
-    # ── Step 1: 임베딩 ──
-    # 토큰 ID와 위치 ID를 각각 벡터로 변환하고 더합니다.
-    # 이렇게 하면 "위치 3에 있는 문자 'h'" 라는 의미의 벡터가 됩니다.
-    tok_emb = state_dict['wte'][token_id]    # 토큰 임베딩: vocab -> R^d
-    pos_emb = state_dict['wpe'][pos_id]      # 위치 임베딩: position -> R^d
+    # -- Step 1: Embedding --
+    # Convert token ID and position ID to vectors and add them together.
+    # This produces a vector representing "the character 'h' at position 3".
+    tok_emb = state_dict['wte'][token_id]    # Token embedding: vocab -> R^d
+    pos_emb = state_dict['wpe'][pos_id]      # Position embedding: position -> R^d
     x = [t + p for t, p in zip(tok_emb, pos_emb)]
     x = rmsnorm(x)
 
-    # ── Step 2: Grassmann 레이어 반복 ──
+    # -- Step 2: Iterate through Grassmann layers --
     for li in range(n_layer):
-        x_res = x      # 잔차 연결을 위해 현재 상태 저장
+        x_res = x      # Save current state for residual connection
         x = rmsnorm(x)
 
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        #  (A) 차원 축소 (Linear Reduction)
+        #  (A) Linear Reduction (Dimension Reduction)
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # x (16차원) → z (4차원)
+        # x (16-dim) -> z (4-dim)
         #
-        # 왜 차원을 줄이는가?
-        #   Plucker 좌표의 차원 = C(r, 2) = r*(r-1)/2
-        #   r=16이면 C(16,2)=120... 너무 크고 계산 비용이 큼
-        #   r=4이면 C(4,2)=6 으로 관리 가능
+        # Why reduce dimensions?
+        #   Plucker coordinate dimension = C(r, 2) = r*(r-1)/2
+        #   If r=16, C(16,2)=120... too large and computationally expensive
+        #   If r=4, C(4,2)=6, which is manageable
         #
-        # Attention과의 비교:
-        #   Attention: x → Q (via W_q), x → K (via W_k) → 두 개의 프로젝션
-        #   Grassmann: x → z (via W_red) → 하나의 프로젝션으로 충분!
-        #   (Q,K 대신 하나의 z에서 Plucker로 관계를 추출하므로)
+        # Comparison with Attention:
+        #   Attention: x -> Q (via W_q), x -> K (via W_k) -> two projections
+        #   Grassmann: x -> z (via W_red) -> a single projection is enough!
+        #   (Since relationships are extracted via Plucker from a single z,
+        #    instead of needing separate Q and K)
         z = linear(x, state_dict[f'L{li}.W_red'])
 
-        # 현재 위치의 z를 캐시에 추가 (이후 토큰들이 참조할 수 있도록)
+        # Add current position's z to cache (so future tokens can reference it)
         z_cache[li].append(z)
 
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        #  (B) 다중 스케일 Plucker 인코딩 (논문의 핵심 연산!)
+        #  (B) Multi-Scale Plucker Encoding (The Paper's Core Operation!)
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 현재 토큰의 z와 이전 토큰들의 z를 쌍으로 묶어
-        # 각 쌍의 Plucker 좌표를 계산합니다.
+        # Pairs the current token's z with previous tokens' z values
+        # and computes Plucker coordinates for each pair.
         #
-        # 예: 현재 위치 t=5, window=[1,2,4] 이면
-        #   delta=1: Plucker(z_5, z_4) → "바로 전 토큰과의 기하학적 관계"
-        #   delta=2: Plucker(z_5, z_3) → "두 칸 전 토큰과의 기하학적 관계"
-        #   delta=4: Plucker(z_5, z_1) → "네 칸 전 토큰과의 기하학적 관계"
+        # Example: At position t=5, window=[1,2,4]:
+        #   delta=1: Plucker(z_5, z_4) -> "geometric relationship with the previous token"
+        #   delta=2: Plucker(z_5, z_3) -> "geometric relationship with the token 2 steps back"
+        #   delta=4: Plucker(z_5, z_1) -> "geometric relationship with the token 4 steps back"
         #
-        # Attention과의 비교:
-        #   Attention: 모든 이전 토큰과의 Q*K 유사도 계산 → O(L) per token
-        #   Grassmann: 고정된 수의 오프셋만 계산           → O(|window|) per token
-        #   |window|는 상수이므로 전체 시퀀스에 대해 O(L) vs Attention의 O(L^2)
+        # Comparison with Attention:
+        #   Attention: Computes Q*K similarity with all previous tokens -> O(L) per token
+        #   Grassmann: Computes only a fixed number of offsets             -> O(|window|) per token
+        #   Since |window| is constant, the overall complexity is O(L) vs Attention's O(L^2)
 
         geo_features = []
 
         for delta in window:
             prev_pos = pos_id - delta
             if prev_pos < 0:
-                # 범위 밖이면 건너뜀 (예: 위치 0에서 delta=1이면 위치 -1 → 없음)
+                # Skip if out of range (e.g., at position 0 with delta=1 -> position -1 doesn't exist)
                 continue
 
-            z_prev = z_cache[li][prev_pos]   # delta만큼 이전 토큰의 축소 벡터
+            z_prev = z_cache[li][prev_pos]   # Reduced vector of the token delta steps back
 
-            # --- Plucker 좌표 계산 ---
+            # --- Plucker coordinate computation ---
             plucker = compute_plucker(z, z_prev)
 
-            # --- 정규화 ---
-            # Plucker 좌표는 Grassmann 다양체 위의 "사영 좌표"이므로
-            # 스케일(크기)은 중요하지 않고 방향만 중요합니다.
-            # 정규화하면 수치적으로도 안정적입니다.
+            # --- Normalization ---
+            # Plucker coordinates are "projective coordinates" on the Grassmann manifold,
+            # so scale (magnitude) doesn't matter — only direction matters.
+            # Normalization also improves numerical stability.
             norm_sq = sum(p * p for p in plucker)
             norm_inv = (norm_sq + Value(1e-8)) ** -0.5
             plucker = [p * norm_inv for p in plucker]
 
-            # --- 모델 차원으로 프로젝션 ---
-            # 6차원 Plucker 좌표 → 16차원 모델 공간으로 되돌림
-            # 이 프로젝션이 "기하학적 관계"를 모델이 이해할 수 있는 표현으로 변환
+            # --- Projection to model dimension ---
+            # 6-dim Plucker coordinates -> restored to 16-dim model space
+            # This projection transforms "geometric relationships" into a
+            # representation the model can understand
             g_delta = linear(plucker, state_dict[f'L{li}.W_plu'])
             geo_features.append(g_delta)
 
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        #  (C) 기하학 Feature 집약 (Aggregation)
+        #  (C) Geometric Feature Aggregation
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 여러 오프셋에서 온 기하학 feature들을 평균냅니다.
+        # Averages the geometric features from multiple offsets.
         #
-        # delta=1에서 온 feature: "인접 문맥 정보"
-        # delta=2에서 온 feature: "약간 넓은 문맥 정보"
-        # delta=4에서 온 feature: "먼 문맥 정보"
-        # → 이들의 평균 = "다양한 스케일의 문맥을 종합한 정보"
+        # Feature from delta=1: "adjacent context information"
+        # Feature from delta=2: "slightly wider context information"
+        # Feature from delta=4: "distant context information"
+        # -> Their average = "information synthesizing context at various scales"
         #
-        # Attention과의 비교:
-        #   Attention: softmax 가중 평균 (attention weight로 V를 혼합)
-        #   Grassmann: 단순 평균 (각 스케일의 기하학 정보를 균등 혼합)
+        # Comparison with Attention:
+        #   Attention: Softmax-weighted average (mixes V using attention weights)
+        #   Grassmann: Simple average (equally mixes geometric info from each scale)
 
         if geo_features:
             nf = len(geo_features)
             g = [sum(geo_features[k][j] for k in range(nf)) / nf
                  for j in range(n_embd)]
         else:
-            # 위치 0에서는 참조할 이전 토큰이 없으므로 영벡터 사용
-            # 게이트가 이 경우 원본(x)을 그대로 통과시키도록 학습됩니다
+            # At position 0, there are no previous tokens to reference, so use a zero vector.
+            # The gate learns to pass through the original x in this case.
             g = [Value(0.0) for _ in range(n_embd)]
 
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        #  (D) 게이트 기반 혼합 (Gated Mixing)
+        #  (D) Gated Mixing
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # "원본 정보(x)와 기하학 정보(g)를 얼마나 섞을까?"
-        # 이 결정을 학습 가능한 게이트(gate)가 차원별로 내립니다.
+        # "How much should we mix original information (x) with geometric
+        #  information (g)?"
+        # A learnable gate makes this decision per dimension.
         #
         # alpha_j = sigmoid(W_gate_h * x + W_gate_g * g)_j
         #
-        # alpha_j 가 1에 가까우면: j번째 차원은 원본 x를 유지
-        #   → "이 차원의 정보는 기하학 없이도 충분해"
+        # If alpha_j is close to 1: dimension j retains original x
+        #   -> "This dimension's information is sufficient without geometry"
         #
-        # alpha_j 가 0에 가까우면: j번째 차원은 기하학 g를 사용
-        #   → "이 차원은 이전 토큰과의 관계 정보가 중요해"
+        # If alpha_j is close to 0: dimension j uses geometric g
+        #   -> "This dimension needs relationship info with previous tokens"
         #
-        # 최종 출력: x_mixed = alpha * x + (1-alpha) * g
+        # Final output: x_mixed = alpha * x + (1-alpha) * g
         #
-        # Attention과의 비교:
-        #   Attention: 단일 출력 (attention weighted sum)
-        #   Grassmann: 게이트가 원본과 기하학을 "차원별로" 혼합
-        #              → 더 세밀한 제어가 가능
+        # Comparison with Attention:
+        #   Attention: Single output (attention weighted sum)
+        #   Grassmann: Gate mixes original and geometric info "per dimension"
+        #              -> Enables finer-grained control
 
         gate_h = linear(x, state_dict[f'L{li}.W_gate_h'])
         gate_g = linear(g, state_dict[f'L{li}.W_gate_g'])
@@ -577,82 +587,83 @@ def forward(token_id, pos_id, z_cache):
         x = [a * xi + (Value(1.0) - a) * gi
              for a, xi, gi in zip(alpha, x, g)]
 
-        # 잔차 연결 (Residual Connection)
-        # 원래 입력을 더해줌 → gradient가 깊은 레이어까지 잘 흐르도록
+        # Residual Connection
+        # Add back the original input -> helps gradients flow through deep layers
         x = [a + b for a, b in zip(x, x_res)]
 
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        #  (E) Feed-Forward Network (Transformer와 동일)
+        #  (E) Feed-Forward Network (Same as Transformer)
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # FFN은 각 토큰을 독립적으로 변환하는 단계입니다.
-        # 구조: d → 4d (확장) → ReLU (비선형) → 4d → d (축소)
+        # FFN is a stage that independently transforms each token.
+        # Structure: d -> 4d (expand) -> ReLU (nonlinearity) -> 4d -> d (contract)
         #
-        # Grassmann 레이어가 "토큰 간 관계"를 처리했다면,
-        # FFN은 "토큰 내부의 표현"을 정제하는 역할입니다.
-        # (이 부분은 원래 Transformer와 완전히 동일합니다)
+        # If the Grassmann layer handled "inter-token relationships",
+        # FFN refines the "internal representation of each token".
+        # (This part is completely identical to the original Transformer)
         x_res = x
         x = rmsnorm(x)
-        x = linear(x, state_dict[f'L{li}.mlp_fc1'])    # d → 4d 확장
-        x = [xi.relu() for xi in x]                      # 비선형 활성화
-        x = linear(x, state_dict[f'L{li}.mlp_fc2'])    # 4d → d 축소
-        x = [a + b for a, b in zip(x, x_res)]            # 잔차 연결
+        x = linear(x, state_dict[f'L{li}.mlp_fc1'])    # d -> 4d expansion
+        x = [xi.relu() for xi in x]                      # Nonlinear activation
+        x = linear(x, state_dict[f'L{li}.mlp_fc2'])    # 4d -> d contraction
+        x = [a + b for a, b in zip(x, x_res)]            # Residual connection
 
-    # ── Step 3: 출력 프로젝션 ──
-    # 16차원 히든 벡터를 vocab_size 차원으로 변환합니다.
-    # 이 값(logits)에 softmax를 적용하면 "다음 토큰이 각 문자일 확률"이 됩니다.
+    # -- Step 3: Output Projection --
+    # Transforms the 16-dim hidden vector to vocab_size dimensions.
+    # Applying softmax to these values (logits) gives "the probability of each
+    # character being the next token".
     return linear(x, state_dict['lm_head'])
 
 
 # ============================================================================
-#  PART 8: 학습 루프
+#  PART 8: Training Loop
 # ============================================================================
 #
-#  [학습의 목표]
-#    "이전 문자들이 주어졌을 때 다음 문자를 정확히 예측하는 것"
+#  [Training Objective]
+#    "Accurately predict the next character given the previous characters"
 #
-#  예시:  이름 "emma" 학습 과정
-#    입력 BOS → 정답 'e'  (이름의 첫 글자 예측)
-#    입력 'e' → 정답 'm'  (두 번째 글자 예측)
-#    입력 'm' → 정답 'm'  (세 번째 글자 예측)
-#    입력 'm' → 정답 'a'  (네 번째 글자 예측)
-#    입력 'a' → 정답 BOS  (이름의 끝 예측)
+#  Example: Training on the name "emma"
+#    Input BOS -> Target 'e'  (predict the first character of the name)
+#    Input 'e' -> Target 'm'  (predict the second character)
+#    Input 'm' -> Target 'm'  (predict the third character)
+#    Input 'm' -> Target 'a'  (predict the fourth character)
+#    Input 'a' -> Target BOS  (predict the end of the name)
 #
-#  [학습 단계]
-#    1. 이름 하나를 토큰화
-#    2. 각 위치에서 forward pass → 다음 토큰 예측
-#    3. Cross-entropy loss 계산 (예측이 정답과 얼마나 다른지)
-#    4. backward() → 모든 파라미터의 gradient 계산
-#    5. Adam optimizer로 파라미터 업데이트
+#  [Training Steps]
+#    1. Tokenize one name
+#    2. Forward pass at each position -> predict next token
+#    3. Compute cross-entropy loss (how far off is the prediction from the target)
+#    4. backward() -> compute gradients for all parameters
+#    5. Update parameters with Adam optimizer
 #
 #  [Adam Optimizer]
-#    단순 SGD보다 빠르고 안정적인 최적화 알고리즘:
-#    - m (1차 모멘트): gradient의 이동 평균 → "방향"을 부드럽게
-#    - v (2차 모멘트): gradient^2의 이동 평균 → "스케일"을 자동 조절
-#    - learning rate warmup/decay: 학습 초반엔 빠르게, 후반엔 천천히
+#    A faster and more stable optimization algorithm than plain SGD:
+#    - m (1st moment): moving average of gradients -> smooths the "direction"
+#    - v (2nd moment): moving average of gradient^2 -> auto-adjusts the "scale"
+#    - Learning rate warmup/decay: fast at the beginning, slow at the end
 # ============================================================================
 
 lr, beta1, beta2, eps = 0.01, 0.85, 0.99, 1e-8
-m_buf = [0.0] * len(params)    # Adam 1차 모멘트
-v_buf = [0.0] * len(params)    # Adam 2차 모멘트
+m_buf = [0.0] * len(params)    # Adam 1st moment
+v_buf = [0.0] * len(params)    # Adam 2nd moment
 num_steps = 1000
 
 print(f"\n{'=' * 60}")
-print(f"  microGrassmann 학습 시작")
-print(f"  Attention 없이 Grassmann 기하학으로 시퀀스 모델링!")
-print(f"  Plucker 좌표가 Q*K 내적을 대체합니다.")
+print(f"  microGrassmann training started")
+print(f"  Sequence modeling with Grassmann geometry, no Attention!")
+print(f"  Plucker coordinates replace the Q*K dot product.")
 print(f"{'=' * 60}\n")
 
 for step in range(num_steps):
-    # --- 데이터 준비 ---
+    # --- Data preparation ---
     doc = docs[step % len(docs)]
     tokens = [BOS] + [uchars.index(ch) for ch in doc] + [BOS]
     n = min(block_size, len(tokens) - 1)
 
-    # z_cache: Attention의 KV-cache에 대응하는 "축소 벡터 캐시"
+    # z_cache: "reduced vector cache" corresponding to Attention's KV-cache
     z_cache = [[] for _ in range(n_layer)]
     losses = []
 
-    # --- Forward pass: 각 위치에서 다음 토큰 예측 ---
+    # --- Forward pass: predict next token at each position ---
     for pos_id in range(n):
         token_id  = tokens[pos_id]
         target_id = tokens[pos_id + 1]
@@ -660,54 +671,56 @@ for step in range(num_steps):
         logits = forward(token_id, pos_id, z_cache)
         probs  = softmax(logits)
 
-        # Cross-entropy loss: -log(정답 토큰의 확률)
-        # 확률이 1에 가까우면 loss ≈ 0 (잘 예측함)
-        # 확률이 0에 가까우면 loss → 큰 값 (잘못 예측함)
+        # Cross-entropy loss: -log(probability of the target token)
+        # If probability is close to 1, loss ~ 0 (good prediction)
+        # If probability is close to 0, loss -> large value (bad prediction)
         losses.append(-probs[target_id].log())
 
-    loss = (1 / n) * sum(losses)    # 평균 loss
-    loss.backward()                  # 역전파 → gradient 계산
+    loss = (1 / n) * sum(losses)    # Average loss
+    loss.backward()                  # Backpropagation -> compute gradients
 
-    # --- Adam optimizer 업데이트 ---
-    lr_t = lr * (1 - step / num_steps)    # 선형 학습률 감쇠
+    # --- Adam optimizer update ---
+    lr_t = lr * (1 - step / num_steps)    # Linear learning rate decay
     for i, p in enumerate(params):
         m_buf[i] = beta1 * m_buf[i] + (1 - beta1) * p.grad
         v_buf[i] = beta2 * v_buf[i] + (1 - beta2) * p.grad ** 2
-        m_hat = m_buf[i] / (1 - beta1 ** (step + 1))   # 편향 보정
-        v_hat = v_buf[i] / (1 - beta2 ** (step + 1))   # 편향 보정
+        m_hat = m_buf[i] / (1 - beta1 ** (step + 1))   # Bias correction
+        v_hat = v_buf[i] / (1 - beta2 ** (step + 1))   # Bias correction
         p.data -= lr_t * m_hat / (v_hat ** 0.5 + eps)
-        p.grad = 0    # gradient 초기화 (다음 step을 위해)
+        p.grad = 0    # Reset gradient (for the next step)
 
     if step % 100 == 0 or step == num_steps - 1:
         print(f"  step {step + 1:4d}/{num_steps} | loss {loss.data:.4f}")
 
 
 # ============================================================================
-#  PART 9: 추론 — 학습된 모델로 새로운 이름 생성
+#  PART 9: Inference — Generating New Names with the Trained Model
 # ============================================================================
 #
-#  학습이 끝났으니, 모델이 "본 적 없는 새로운 이름"을 만들어냅니다.
+#  Now that training is complete, the model generates "new names it has never
+#  seen before".
 #
-#  [생성 과정 (Autoregressive Sampling)]
-#    1. BOS 토큰으로 시작
-#    2. 모델이 다음 토큰의 확률 분포를 출력
-#    3. 확률에 따라 토큰 하나를 샘플링
-#    4. 샘플링된 토큰을 입력으로 넣고 2번 반복
-#    5. BOS(=끝) 토큰이 나오면 종료
+#  [Generation Process (Autoregressive Sampling)]
+#    1. Start with BOS token
+#    2. Model outputs a probability distribution over next tokens
+#    3. Sample one token according to the probabilities
+#    4. Feed the sampled token as input and repeat from step 2
+#    5. Stop when BOS (= end) token is generated
 #
 #  [Temperature]
-#    temperature가 낮으면 (< 1): 확률이 높은 토큰을 더 선호 → 안전한 이름
-#    temperature가 높으면 (> 1): 확률이 균등해짐 → 창의적(이상한) 이름
-#    temperature = 0.5: 약간 보수적으로 생성
+#    Low temperature (< 1): Favors high-probability tokens -> safe names
+#    High temperature (> 1): Probabilities become more uniform -> creative (unusual) names
+#    temperature = 0.5: Generates somewhat conservatively
 #
-#  핵심: 이 모든 생성이 Attention 없이, 순수하게 Grassmann 기하학만으로!
+#  Key point: All this generation happens without Attention, purely using
+#  Grassmann geometry!
 # ============================================================================
 
 temperature = 0.5
 
 print(f"\n{'=' * 60}")
-print(f"  추론: Grassmann 모델이 생성한 새로운 이름들")
-print(f"  (Attention 없이, Plucker 좌표의 기하학적 흐름만으로)")
+print(f"  Inference: New names generated by the Grassmann model")
+print(f"  (Without Attention, using only geometric flow of Plucker coordinates)")
 print(f"{'=' * 60}\n")
 
 for idx in range(20):
@@ -728,6 +741,6 @@ for idx in range(20):
 
     print(f"  sample {idx + 1:2d}: {''.join(chars)}")
 
-print(f"\n  완료! Attention 없이 Grassmann 기하학만으로 이름을 생성했습니다.")
-print(f"  논문: https://arxiv.org/abs/2512.19428")
-print(f"  참고: https://gist.github.com/karpathy/8627fe009c40f57531cb18360106ce95")
+print(f"\n  Done! Generated names using only Grassmann geometry, without Attention.")
+print(f"  Paper: https://arxiv.org/abs/2512.19428")
+print(f"  Reference: https://gist.github.com/karpathy/8627fe009c40f57531cb18360106ce95")

@@ -1,23 +1,23 @@
 """
-benchmark_paren.py — 괄호 매칭으로 Attention vs Grassmann 비교
+benchmark_paren.py — Comparing Attention vs Grassmann on Parenthesis Matching
 ================================================================
-이름(5~6글자)에서는 차이가 안 나니까,
-장거리 의존성이 필요한 괄호 매칭 과제로 비교합니다.
+Since names (5-6 characters) don't show a difference,
+we compare using a parenthesis matching task that requires long-range dependencies.
 
-"((()))(())" 같은 문자열에서 다음 토큰을 예측하려면
-멀리 떨어진 열린 괄호를 기억해야 합니다.
+To predict the next token in strings like "((()))(())",
+the model must remember distant opening parentheses.
 
-실행: python3 benchmark_paren.py
+Usage: python3 benchmark_paren.py
 ================================================================
 """
 import math, random, time
 random.seed(42)
 
 # ================================================================
-# 데이터: 균형 잡힌 괄호 문자열 생성
+# Data: Generating Balanced Parenthesis Strings
 # ================================================================
 def generate_parens(min_len=20, max_len=50):
-    """랜덤 균형 괄호 문자열 생성 (Dyck language)"""
+    """Generate a random balanced parenthesis string (Dyck language)"""
     target_pairs = random.randint(min_len // 2, max_len // 2)
     seq = []
     open_count = 0
@@ -48,11 +48,11 @@ block_size = 64
 docs = [generate_parens() for _ in range(10000)]
 random.shuffle(docs)
 avg_len = sum(len(d) for d in docs) / len(docs)
-print(f"괄호 데이터: {len(docs)}개, 평균 길이: {avg_len:.1f}, block_size: {block_size}")
-print(f"예시: {''.join('()B'[t] for t in docs[0][:40])}...")
+print(f"Parenthesis data: {len(docs)} samples, avg length: {avg_len:.1f}, block_size: {block_size}")
+print(f"Example: {''.join('()B'[t] for t in docs[0][:40])}...")
 
 # ================================================================
-# Autograd (공유)
+# Autograd (Shared)
 # ================================================================
 class Value:
     __slots__ = ('data', 'grad', '_children', '_local_grads')
@@ -110,7 +110,7 @@ matrix = lambda nout, nin, std=0.08: \
     [[Value(random.gauss(0, std)) for _ in range(nin)] for _ in range(nout)]
 
 # ================================================================
-# 모델 A: Attention (microGPT)
+# Model A: Attention (microGPT)
 # ================================================================
 def build_attention():
     n_embd, n_layer, n_head = 16, 1, 4
@@ -167,13 +167,13 @@ def build_attention():
     return params, forward, make_cache
 
 # ================================================================
-# 모델 B: Grassmann
+# Model B: Grassmann
 # ================================================================
 def build_grassmann():
     n_embd, n_layer = 16, 1
     r = 4
     plucker_dim = r * (r - 1) // 2
-    window = [1, 2, 4, 8, 16]  # 긴 시퀀스용으로 확장
+    window = [1, 2, 4, 8, 16]  # Extended for longer sequences
 
     sd = {
         'wte': matrix(vocab_size, n_embd),
@@ -238,7 +238,7 @@ def build_grassmann():
     return params, forward, make_cache
 
 # ================================================================
-# 학습 & 평가
+# Training & Evaluation
 # ================================================================
 def train_and_eval(name, params, forward, make_cache, num_steps=1000):
     lr, beta1, beta2, eps = 0.01, 0.85, 0.99, 1e-8
@@ -246,7 +246,7 @@ def train_and_eval(name, params, forward, make_cache, num_steps=1000):
     v_buf = [0.0] * len(params)
 
     print(f"\n{'='*60}")
-    print(f"  {name} | 파라미터: {len(params)}개 | {num_steps} steps")
+    print(f"  {name} | Parameters: {len(params)} | {num_steps} steps")
     print(f"{'='*60}")
 
     t0 = time.time()
@@ -294,7 +294,7 @@ def train_and_eval(name, params, forward, make_cache, num_steps=1000):
             eval_tokens += 1
     eval_loss = eval_loss_sum / eval_tokens
 
-    # 생성 테스트: 유효한 괄호 비율
+    # Generation test: valid parentheses ratio
     valid_count = 0
     gen_samples = 50
     for _ in range(gen_samples):
@@ -307,7 +307,7 @@ def train_and_eval(name, params, forward, make_cache, num_steps=1000):
             tid = random.choices(range(vocab_size), weights=[p.data for p in probs])[0]
             if tid == BOS: break
             seq.append(tid)
-        # 유효성 검사
+        # Validity check
         depth = 0
         valid = True
         for t in seq:
@@ -321,11 +321,11 @@ def train_and_eval(name, params, forward, make_cache, num_steps=1000):
         if valid: valid_count += 1
 
     print(f"\n  eval loss: {eval_loss:.4f}")
-    print(f"  학습 시간: {train_time:.1f}초 ({train_time/num_steps*1000:.0f}ms/step)")
-    print(f"  유효 괄호 생성: {valid_count}/{gen_samples} ({valid_count/gen_samples*100:.0f}%)")
+    print(f"  Training time: {train_time:.1f}s ({train_time/num_steps*1000:.0f}ms/step)")
+    print(f"  Valid parentheses generated: {valid_count}/{gen_samples} ({valid_count/gen_samples*100:.0f}%)")
 
-    # 생성 예시 5개
-    print(f"  생성 예시:")
+    # 5 generation examples
+    print(f"  Generation examples:")
     for si in range(5):
         cache = make_cache()
         tid = BOS
@@ -341,25 +341,25 @@ def train_and_eval(name, params, forward, make_cache, num_steps=1000):
     return eval_loss, train_time, valid_count / gen_samples
 
 # ================================================================
-# 실행
+# Execution
 # ================================================================
 num_steps = 1000
 
-print("Attention 모델 빌드...")
+print("Building Attention model...")
 a_params, a_fwd, a_cache = build_attention()
-print("Grassmann 모델 빌드...")
+print("Building Grassmann model...")
 g_params, g_fwd, g_cache = build_grassmann()
 
 a_loss, a_time, a_valid = train_and_eval("Attention (microGPT)", a_params, a_fwd, a_cache, num_steps)
 g_loss, g_time, g_valid = train_and_eval("Grassmann (Plucker)", g_params, g_fwd, g_cache, num_steps)
 
 print(f"\n{'='*60}")
-print(f"  최종 비교 (괄호 매칭, 평균 길이 {avg_len:.0f})")
+print(f"  Final Comparison (parenthesis matching, avg length {avg_len:.0f})")
 print(f"{'='*60}")
-print(f"  {'':15} {'Attention':>12} {'Grassmann':>12} {'차이':>10}")
+print(f"  {'':15} {'Attention':>12} {'Grassmann':>12} {'Diff':>10}")
 print(f"  {'─'*52}")
-print(f"  {'파라미터':15} {len(a_params):>12} {len(g_params):>12} {len(g_params)/len(a_params)*100-100:>+9.0f}%")
+print(f"  {'Parameters':15} {len(a_params):>12} {len(g_params):>12} {len(g_params)/len(a_params)*100-100:>+9.0f}%")
 print(f"  {'eval loss':15} {a_loss:>12.4f} {g_loss:>12.4f} {(g_loss-a_loss)/a_loss*100:>+9.1f}%")
-print(f"  {'학습 시간':15} {a_time:>11.1f}s {g_time:>11.1f}s {(g_time-a_time)/a_time*100:>+9.0f}%")
+print(f"  {'Training time':15} {a_time:>11.1f}s {g_time:>11.1f}s {(g_time-a_time)/a_time*100:>+9.0f}%")
 print(f"  {'ms/step':15} {a_time/num_steps*1000:>11.0f}ms {g_time/num_steps*1000:>11.0f}ms")
-print(f"  {'유효 괄호':15} {a_valid*100:>11.0f}% {g_valid*100:>11.0f}%")
+print(f"  {'Valid parens':15} {a_valid*100:>11.0f}% {g_valid*100:>11.0f}%")
